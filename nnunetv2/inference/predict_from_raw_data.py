@@ -63,6 +63,11 @@ class nnUNetPredictor(object):
             perform_everything_on_device = False
         self.device = device
         self.perform_everything_on_device = perform_everything_on_device
+    
+    def _as_tensor(self, out):
+        # If the network returns deep-supervision outputs (list/tuple),
+        # always take the primary head for inference.
+        return out[0] if isinstance(out, (list, tuple)) else out
 
     def initialize_from_trained_model_folder(self, model_training_output_dir: str,
                                              use_folds: Union[Tuple[Union[int, str]], None],
@@ -539,22 +544,44 @@ class nnUNetPredictor(object):
 
     @torch.inference_mode()
     def _internal_maybe_mirror_and_predict(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Returns logits with shape (C, Z, Y, X)  [no batch dim!]
+        and guarantees a Tensor even if the network returns a list/tuple.
+        """
+        def _main_head_no_batch(t: torch.Tensor) -> torch.Tensor:
+            t = self._as_tensor(t)                  # list/tuple -> Tensor (B,C,...)
+            if t.ndim == x.ndim:                    # same dims as input => has batch
+                t = t[0]                            # remove batch -> (C,...)
+            return t
+
         mirror_axes = self.allowed_mirroring_axes if self.use_mirroring else None
-        prediction = self.network(x)
+
+        # base prediction (C, ...)
+        prediction = _main_head_no_batch(self.network(x))
 
         if mirror_axes is not None:
-            # check for invalid numbers in mirror_axes
-            # x should be 5d for 3d images and 4d for 2d. so the max value of mirror_axes cannot exceed len(x.shape) - 3
-            assert max(mirror_axes) <= x.ndim - 3, 'mirror_axes does not match the dimension of the input!'
+            assert len(mirror_axes) == 0 or max(mirror_axes) <= x.ndim - 3, \
+                'mirror_axes does not match the dimension of the input!'
 
-            mirror_axes = [m + 2 for m in mirror_axes]
-            axes_combinations = [
-                c for i in range(len(mirror_axes)) for c in itertools.combinations(mirror_axes, i + 1)
-            ]
-            for axes in axes_combinations:
-                prediction += torch.flip(self.network(torch.flip(x, axes)), axes)
-            prediction /= (len(axes_combinations) + 1)
-        return prediction
+            # For input x (B,C,Z,Y,X), spatial flip dims are +2 -> {2,3,4}
+            axes_in = [m + 2 for m in mirror_axes]
+
+            # For output (C,Z,Y,X) we dropped the batch, so shift by -1 -> {1,2,3}
+            # We'll compute combinations on input axes (for flipping x),
+            # and convert to output axes when flipping the predictions.
+            axes_combinations_in = [c for i in range(len(axes_in))
+                                    for c in itertools.combinations(axes_in, i + 1)]
+
+            for axes_in_tuple in axes_combinations_in:
+                flipped_in  = torch.flip(x, axes_in_tuple)
+                flipped_out = _main_head_no_batch(self.network(flipped_in))
+                # map input flip dims to output flip dims: a_in -> a_out = a_in - 1
+                axes_out_tuple = tuple(a - 1 for a in axes_in_tuple)
+                prediction  = prediction + torch.flip(flipped_out, axes_out_tuple)
+
+            prediction = prediction / (len(axes_combinations_in) + 1)
+
+        return prediction  # (C, ...)
 
     @torch.inference_mode()
     def _internal_predict_sliding_window_return_logits(self,
@@ -606,7 +633,7 @@ class nnUNetPredictor(object):
                         queue.task_done()
                         break
                     workon, sl = item
-                    prediction = self._internal_maybe_mirror_and_predict(workon)[0].to(results_device)
+                    prediction = self._internal_maybe_mirror_and_predict(workon).to(results_device)
 
                     if self.use_gaussian:
                         prediction *= gaussian
