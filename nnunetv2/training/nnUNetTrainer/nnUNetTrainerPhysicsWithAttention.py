@@ -428,8 +428,8 @@ class nnUNetTrainerPhysicsLoss(object):
             dct['cudnn_version'] = cudnn_version
             save_json(dct, join(self.output_folder, "debug.json"))
 
-    @staticmethod
-    def build_network_architecture(architecture_class_name: str,
+    
+    def build_network_architecture(self, architecture_class_name: str,
                                    arch_init_kwargs: dict,
                                    arch_init_kwargs_req_import: Union[List[str], Tuple[str, ...]],
                                    num_input_channels: int,
@@ -454,14 +454,38 @@ class nnUNetTrainerPhysicsLoss(object):
         should be generated. label_manager takes care of all that for you.)
 
         """
-        return get_network_from_plans(
-            architecture_class_name,
-            arch_init_kwargs,
-            arch_init_kwargs_req_import,
-            num_input_channels,
-            num_output_channels,
-            allow_init=True,
-            deep_supervision=enable_deep_supervision)
+
+        # Import your attention net
+        from nnunetv2.training.nnUNetTrainer.nnUNetTrainerWithAttention import (
+            PriorGatedUNetWithAttentionInfer,
+        )
+
+        # Get patch_size robustly from your configuration
+        if hasattr(self.configuration_manager, "patch_size") and self.configuration_manager.patch_size is not None:
+            patch_size = tuple(self.configuration_manager.patch_size)
+        else:
+            raise RuntimeError("patch_size not found on configuration_manager; required by PriorGatedUNetWithAttention.")
+
+        net = PriorGatedUNetWithAttentionInfer(
+            in_channels=num_input_channels,
+            out_channels=num_output_channels,
+            patch_size=patch_size,
+            deep_supervision=bool(enable_deep_supervision),
+        )
+        # synchronize DS flags (your trainer toggles these later as well)
+        for attr in ("do_ds", "deep_supervision", "enable_deep_supervision"):
+            if hasattr(net, attr):
+                setattr(net, attr, bool(enable_deep_supervision))
+        return net
+
+        # return get_network_from_plans(
+        #     architecture_class_name,
+        #     arch_init_kwargs,
+        #     arch_init_kwargs_req_import,
+        #     num_input_channels,
+        #     num_output_channels,
+        #     allow_init=True,
+        #     deep_supervision=enable_deep_supervision)
 
     def _get_deep_supervision_scales(self):
         if self.enable_deep_supervision:

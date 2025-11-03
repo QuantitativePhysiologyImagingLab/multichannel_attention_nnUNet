@@ -141,11 +141,11 @@ class nnUNetTrainerWithAttention(nnUNetTrainer):
         # forward all v2 args to the base implementation
         base = super().get_training_transforms(*args, **kwargs)
 
-        rcd = RandomChannelDropout(p_each=0.4, channels_to_consider=(1, 2))
+        rcd = RandomChannelDropout(p_each=0)
 
         # If it's a Compose-like with a .transforms list, insert; otherwise wrap.
         if hasattr(base, "transforms") and isinstance(base.transforms, list):
-            base.transforms.insert(0, rcd)
+            # base.transforms.insert(0, rcd)
             return base
 
         class _Prepend:
