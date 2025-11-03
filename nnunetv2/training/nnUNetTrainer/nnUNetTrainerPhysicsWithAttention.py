@@ -68,6 +68,8 @@ from nnunetv2.utilities.helpers import empty_cache, dummy_context
 from nnunetv2.utilities.label_handling.label_handling import convert_labelmap_to_one_hot, determine_num_input_channels
 from nnunetv2.utilities.plans_handling.plans_handler import PlansManager
 
+from nnunetv2.training.nnUNetTrainer.nnUNetTrainer import nnUNetTrainer
+
 class AttachB0DirFromProps(BasicTransform):
     """
     Reads <preprocessed_folder>/<case>.pkl, extracts sitk_stuff.direction (3x3),
@@ -161,7 +163,7 @@ class EnsureB0Shape(BasicTransform):
             data_dict['b0_dir'] = b0
         return data_dict
 
-class nnUNetTrainerPhysicsWithAttention(object):
+class nnUNetTrainerPhysicsWithAttention(nnUNetTrainer):
     def __init__(self, plans: dict, configuration: str, fold: int, dataset_json: dict,
                  device: torch.device = torch.device('cuda')):
         # From https://grugbrain.dev/. Worth a read ya big brains ;-)
