@@ -547,25 +547,8 @@ class nnUNetTrainerPhysicsWithAttention(nnUNetTrainer):
                             {'batch_dice': self.configuration_manager.batch_dice,
                             'do_bg': True, 'smooth': 1e-5, 'ddp': self.is_ddp},
                             {'pi_constant': np.pi},
-                            {
-                                'ce_weight': 1.0,
-                                'dc_weight': 1.0,
-                                'use_topk_ce': False,
-                                'topk_percent': 0.9,
-                                'physics_kwargs': {
-                                    'vein_channel': 1,
-                                    'chi_blood_ppm': 0.30,
-                                    'lambdas': {'phys':10,'mae':5,'tail':0.1,'sign':5},
-                                    'topk_frac': 0.10,
-                                    # defaults stored on the loss (Option B)
-                                    'default_voxel_size': tuple(self.configuration_manager.spacing),
-                                    'expects_b0_from_forward': True,
-                                    'eval_mask_mode': 'predicted_hard',
-                                    'learnable_chi': False,
-                                    'chi_blood_bounds': (0.15, 0.45),
-                                },
-                            },
-                            use_ignore_label=self.label_manager.ignore_label is not None,
+                            {},
+                            ignore_label=self.label_manager.ignore_label is not None,
                             dice_class=MemoryEfficientSoftDiceLoss)
 
         '''
