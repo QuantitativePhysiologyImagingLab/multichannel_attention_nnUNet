@@ -368,6 +368,11 @@ class nnUNetTrainerPhysicsWithAttention(nnUNetTrainer):
         sitk_dir = props['sitk_stuff']['direction']  # length-9 tuple
         B0 = self._compute_B0_from_direction(sitk_dir)
         self._b0_cache[case_key] = B0
+
+        print('Key: ', case_key)
+        print("Direction: ", sitk_dir)
+        print("B0: ", B0)
+
         return B0
 
     def _do_i_compile(self):
