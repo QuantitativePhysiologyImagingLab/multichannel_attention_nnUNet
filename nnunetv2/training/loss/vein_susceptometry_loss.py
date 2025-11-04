@@ -188,7 +188,7 @@ class PhysicsFieldLoss(nn.Module):
              self.lambdas['tail'] * top10 +
              self.lambdas['sign'] * sign_hinge)
         
-        print(L)
+        # print(L)
 
         metrics = {
             'loss_total': L.detach(),

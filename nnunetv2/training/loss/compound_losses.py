@@ -7,31 +7,45 @@ from torch import nn
 
 class DeepSupervisionWrapperPassKwargs(nn.Module):
     """
-    Wrap a base loss to handle deep supervision outputs while forwarding *args/**kwargs
-    to the underlying loss (e.g., physics extras like phase_target, b0_dir).
+    Wrap a base loss to handle deep supervision safely while forwarding *args/**kwargs.
+    - Accepts tensor or list for net_output/target.
+    - Resizes target per head to out_i.shape[2:].
+    - Aligns weight count to #heads.
     """
     def __init__(self, base_loss: nn.Module, weights):
         super().__init__()
-        self.base_loss = base_loss
-        # normalize and keep only positive weights
-        w = torch.as_tensor(weights, dtype=torch.float32)
+        w = torch.as_tensor(list(weights), dtype=torch.float32)
         w = torch.where(w > 0, w, torch.zeros_like(w))
         s = float(w.sum()) if float(w.sum()) > 0 else 1.0
         self.register_buffer("weights", w / s)
+        self.base_loss = base_loss
 
     def forward(self, net_output, target, *args, **kwargs):
-        # If DS is enabled, net_output and target are lists/tuples (hi-res first)
-        if isinstance(net_output, (list, tuple)):
-            assert isinstance(target, (list, tuple)) and len(target) >= len(self.weights), \
-                "Target list must match deep supervision outputs."
-            total = 0.0
-            for i, w in enumerate(self.weights):
-                if float(w) == 0.0:
-                    continue
-                total = total + float(w) * self.base_loss(net_output[i], target[i], *args, **kwargs)
-            return total
-        # No DS
-        return self.base_loss(net_output, target, *args, **kwargs)
+        outs = net_output if isinstance(net_output, (list, tuple)) else [net_output]
+        tgts = target if isinstance(target, (list, tuple)) else [target]
+
+        # Use first target as the "source" to resize others if needed
+        t0 = tgts[0]
+        tgts_resized = []
+        for i, out_i in enumerate(outs):
+            if i < len(tgts) and tgts[i].shape[2:] == out_i.shape[2:]:
+                tgt_i = tgts[i]
+            else:
+                # nearest for labels; keeps dtype
+                tgt_i = F.interpolate(t0.float(), size=out_i.shape[2:], mode='nearest').type_as(t0)
+            tgts_resized.append(tgt_i)
+
+        # Align weights length with number of heads
+        w = self.weights
+        if len(w) != len(outs):
+            w = w[:len(outs)] if len(w) > len(outs) else torch.cat([w, w[-1:].repeat(len(outs)-len(w))])
+
+        total = 0.0
+        for out_i, tgt_i, wi in zip(outs, tgts_resized, w):
+            if float(wi) == 0.0:
+                continue
+            total = total + float(wi) * self.base_loss(out_i, tgt_i, *args, **kwargs)
+        return total
 
 class VeinPhysics_DC_and_CE_loss(nn.Module):
     def __init__(self, soft_dice_kwargs, ce_kwargs, vpl_kwargs, weight_ce=1, weight_dice=1, weight_physics=1, ignore_label=None,
