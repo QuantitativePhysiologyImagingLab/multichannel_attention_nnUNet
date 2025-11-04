@@ -48,7 +48,7 @@ class DeepSupervisionWrapperPassKwargs(nn.Module):
         return total
 
 class VeinPhysics_DC_and_CE_loss(nn.Module):
-    def __init__(self, soft_dice_kwargs, ce_kwargs, vpl_kwargs, weight_ce=1, weight_dice=1, weight_physics=1, ignore_label=None,
+    def __init__(self, soft_dice_kwargs, ce_kwargs, vpl_kwargs, weight_ce=1, weight_dice=1, weight_physics=10, ignore_label=None,
                  dice_class=SoftDiceLoss):
         """
         Weights for CE and Dice do not need to sum to one. You can set whatever you want.
@@ -119,9 +119,9 @@ class VeinPhysics_DC_and_CE_loss(nn.Module):
             )
             total = total + self.weight_physics*phys_loss
 
-        # print("CE loss: ", ce_loss)
-        # print("DC loss: ", dc_loss)
-        # print("Phys loss: ", phys_loss)
+        print("CE loss: ", ce_loss)
+        print("DC loss: ", dc_loss)
+        print("Phys loss: ", phys_loss)
         return total
 
 
