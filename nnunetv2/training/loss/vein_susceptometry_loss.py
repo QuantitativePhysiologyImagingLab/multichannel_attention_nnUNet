@@ -49,7 +49,8 @@ class PhysicsFieldLoss(nn.Module):
         self.eval_mask_mode = eval_mask_mode
 
         # chi_blood as (optionally) learnable, with clamping in forward
-        self._chi_blood = nn.Parameter(torch.tensor(float(chi_blood_ppm)), requires_grad=learnable_chi)
+        # self._chi_blood = nn.Parameter(torch.tensor(float(chi_blood_ppm)), requires_grad=learnable_chi)
+        self._chi_blood = float(chi_blood_ppm)
         self._chi_bounds = tuple(map(float, chi_blood_bounds))
         
     @staticmethod
@@ -95,7 +96,7 @@ class PhysicsFieldLoss(nn.Module):
         field = torch.fft.ifftn(field_k, dim=(-3,-2,-1)).real
         return field
 
-    def forward(self, net_output, target, *,
+    def forward(self, net_output, data,
                 b0_dir,
                 brain_mask=None, vein_eval=None,
                 chi_blood_ppm=None):
@@ -105,11 +106,12 @@ class PhysicsFieldLoss(nn.Module):
         b0_dir:     (3,) or (B,3)
         voxel_size: (sx,sy,sz) in mm
         """
+        # Cast priors to the net’s dtype/device
+        chi_qsm = data[:, 0:1].to(device=net_output.device, dtype=net_output.dtype)   # ppm
+        B_meas  = data[:, 1:2].to(device=net_output.device, dtype=net_output.dtype)   # ppm
+
         probs = torch.softmax(net_output, dim=1)  # (B,C,X,Y,Z)
         vein_p = probs[:, self.vein_channel:self.vein_channel+1]  # (B,1,X,Y,Z)
-
-        chi_qsm = target[:, 0:1]                      # (B,1,X,Y,Z), ppm
-        B_meas  = target[:, 1:2]                    # (B,1,X,Y,Z), ppm
 
         if brain_mask is None:
             brain_mask = (chi_qsm != 0).to(net_output.dtype)
@@ -130,12 +132,12 @@ class PhysicsFieldLoss(nn.Module):
             else:
                 chi_b = torch.tensor(float(self._chi_blood), device=net_output.device, dtype=net_output.dtype)
         else:
-            chi_b = torch.tensor(float(chi_blood_ppm), device=net_output.device, dtype=net_output.dtype)
+            chi_b = torch.tensor(chi_blood_ppm, device=net_output.device, dtype=net_output.dtype)
 
         chi_b = chi_b.view(1, 1, 1, 1, 1)
 
         # Composite susceptibility (detach chi_qsm so we don't backprop into it)
-        chi_total = (1.0 - vein_p.detach()) * chi_qsm.detach() + vein_p * chi_b.view(1,1,1,1,1)
+        chi_total = (1.0 - vein_eval.detach()) * chi_qsm.detach() + vein_eval.detach()*vein_p * chi_b.view(1,1,1,1,1)
 
         # Full-volume dipole forward model
         B_pred = self._dipole_field_from_chi(chi_total, self.default_voxel_size, b0_dir)  # (B,1,X,Y,Z)

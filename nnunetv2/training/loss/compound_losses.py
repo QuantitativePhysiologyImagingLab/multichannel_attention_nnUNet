@@ -60,8 +60,7 @@ class VeinPhysics_DC_and_CE_loss(nn.Module):
 
     def forward(self,
                 net_output: torch.Tensor,
-                target: torch.Tensor,
-                phase_target: torch.Tensor = None,
+                data: torch.Tensor,
                 b0_dir: torch.Tensor = None) -> torch.Tensor:
         """
         net_output: (B, C, X, Y, Z) logits
@@ -97,13 +96,10 @@ class VeinPhysics_DC_and_CE_loss(nn.Module):
                     b0_dir = b0_dir.to(net_output.device, dtype=net_output.dtype)
                 else:
                     raise ValueError("b0_dir must be shape (3,) or (B,3)")
-            # if phase_target wasn’t passed separately but you stored it in target[:,1], recover it:
-            if phase_target is None and target.shape[1] >= 2:
-                phase_target = target[:, 1:2]
 
             phys_loss, _metrics = self.vpl(
                 net_output        = net_output,
-                target            = target,
+                data              = data,
                 b0_dir            = b0_dir
             )
             total = total + self.weight_physics*phys_loss
