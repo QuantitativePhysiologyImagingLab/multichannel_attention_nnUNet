@@ -543,10 +543,10 @@ class nnUNetTrainerPhysicsWithAttention(nnUNetTrainer):
             self.oversample_foreground_percent = oversample_percent
 
     def _build_loss(self):
-        loss = VeinPhysics_DC_and_CE_loss({},
+        loss = VeinPhysics_DC_and_CE_loss(
                             {'batch_dice': self.configuration_manager.batch_dice,
                             'do_bg': True, 'smooth': 1e-5, 'ddp': self.is_ddp},
-                            {'pi_constant': np.pi},
+                            {},
                             {},
                             ignore_label=self.label_manager.ignore_label is not None,
                             dice_class=MemoryEfficientSoftDiceLoss)
