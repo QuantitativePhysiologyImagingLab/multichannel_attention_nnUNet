@@ -551,7 +551,7 @@ class nnUNetTrainerPhysicsWithAttention(nnUNetTrainer):
                             'do_bg': True, 'smooth': 1e-5, 'ddp': self.is_ddp},
                             {},
                             {},
-                            ignore_label=self.label_manager.ignore_label is not None,
+                            ignore_label=self.label_manager.ignore_label,
                             dice_class=MemoryEfficientSoftDiceLoss)
 
         if self._do_i_compile():
