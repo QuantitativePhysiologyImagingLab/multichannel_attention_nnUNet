@@ -5,6 +5,34 @@ from nnunetv2.training.loss.vein_susceptometry_loss import PhysicsFieldLoss
 from nnunetv2.utilities.helpers import softmax_helper_dim1
 from torch import nn
 
+class DeepSupervisionWrapperPassKwargs(nn.Module):
+    """
+    Wrap a base loss to handle deep supervision outputs while forwarding *args/**kwargs
+    to the underlying loss (e.g., physics extras like phase_target, b0_dir).
+    """
+    def __init__(self, base_loss: nn.Module, weights):
+        super().__init__()
+        self.base_loss = base_loss
+        # normalize and keep only positive weights
+        w = torch.as_tensor(weights, dtype=torch.float32)
+        w = torch.where(w > 0, w, torch.zeros_like(w))
+        s = float(w.sum()) if float(w.sum()) > 0 else 1.0
+        self.register_buffer("weights", w / s)
+
+    def forward(self, net_output, target, *args, **kwargs):
+        # If DS is enabled, net_output and target are lists/tuples (hi-res first)
+        if isinstance(net_output, (list, tuple)):
+            assert isinstance(target, (list, tuple)) and len(target) >= len(self.weights), \
+                "Target list must match deep supervision outputs."
+            total = 0.0
+            for i, w in enumerate(self.weights):
+                if float(w) == 0.0:
+                    continue
+                total = total + float(w) * self.base_loss(net_output[i], target[i], *args, **kwargs)
+            return total
+        # No DS
+        return self.base_loss(net_output, target, *args, **kwargs)
+
 class VeinPhysics_DC_and_CE_loss(nn.Module):
     def __init__(self, soft_dice_kwargs, ce_kwargs, vpl_kwargs, weight_ce=1, weight_dice=1, weight_physics=1, ignore_label=None,
                  dice_class=SoftDiceLoss):
