@@ -1139,6 +1139,8 @@ class nnUNetTrainerPhysicsWithAttention(nnUNetTrainer):
         # build (B,3) tensor of B0 directions in voxel coords
         b0_dirs = torch.stack([self._get_case_B0(k) for k in keys], dim=0).to(self.device)
 
+        print("B0: ", b0_dirs[0])
+
         data = data.to(self.device, non_blocking=True)
         if isinstance(target, list):
             target = [i.to(self.device, non_blocking=True) for i in target]
