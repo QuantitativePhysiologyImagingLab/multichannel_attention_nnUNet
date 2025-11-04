@@ -105,9 +105,9 @@ class VeinPhysics_DC_and_CE_loss(nn.Module):
             )
             total = total + self.weight_physics*phys_loss
 
-        print("CE loss: ", ce_loss)
-        print("DC loss: ", dc_loss)
-        print("Phys loss: ", phys_loss)
+        # print("CE loss: ", ce_loss)
+        # print("DC loss: ", dc_loss)
+        # print("Phys loss: ", phys_loss)
         return total
 
 

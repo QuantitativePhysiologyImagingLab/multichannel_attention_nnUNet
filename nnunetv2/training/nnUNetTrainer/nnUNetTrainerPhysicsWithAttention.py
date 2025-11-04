@@ -1207,8 +1207,8 @@ class nnUNetTrainerPhysicsWithAttention(nnUNetTrainer):
         # So autocast will only be active if we have a cuda device.
         with autocast(self.device.type, enabled=True) if self.device.type == 'cuda' else dummy_context():
             output = self.network(data)
-            del data
             l = self.loss(output, target, data, b0_dir=b0_dirs)
+            del data
 
         # we only need the output with the highest output resolution (if DS enabled)
         if self.enable_deep_supervision:
