@@ -369,9 +369,9 @@ class nnUNetTrainerPhysicsWithAttention(nnUNetTrainer):
         B0 = self._compute_B0_from_direction(sitk_dir)
         self._b0_cache[case_key] = B0
 
-        print('Key: ', case_key)
-        print("Direction: ", sitk_dir)
-        print("B0: ", B0)
+        # print('Key: ', case_key)
+        # print("Direction: ", sitk_dir)
+        # print("B0: ", B0)
 
         return B0
 
@@ -1134,7 +1134,6 @@ class nnUNetTrainerPhysicsWithAttention(nnUNetTrainer):
         self.logger.log('lrs', self.optimizer.param_groups[0]['lr'], self.current_epoch)
 
     def train_step(self, batch: dict) -> dict:
-        print(list(batch.keys()))
         data = batch['data']
         target = batch['target']
         phase = data[:, 1:2, ...]
@@ -1143,8 +1142,6 @@ class nnUNetTrainerPhysicsWithAttention(nnUNetTrainer):
 
         # build (B,3) tensor of B0 directions in voxel coords
         b0_dirs = torch.stack([self._get_case_B0(k) for k in keys], dim=0).to(self.device)
-
-        print("B0: ", b0_dirs[0])
 
         data = data.to(self.device, non_blocking=True)
         if isinstance(target, list):
@@ -1211,7 +1208,7 @@ class nnUNetTrainerPhysicsWithAttention(nnUNetTrainer):
         with autocast(self.device.type, enabled=True) if self.device.type == 'cuda' else dummy_context():
             output = self.network(data)
             del data
-            l = self.loss(output, target, phase, b0_dir=b0_dirs)
+            l = self.loss(output, target, data, b0_dir=b0_dirs)
 
         # we only need the output with the highest output resolution (if DS enabled)
         if self.enable_deep_supervision:
