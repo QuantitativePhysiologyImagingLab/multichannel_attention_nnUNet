@@ -104,7 +104,6 @@ class VeinPhysics_DC_and_CE_loss(nn.Module):
             phys_loss, _metrics = self.vpl(
                 net_output        = net_output,
                 target            = target,
-                phase_target      = phase_target,
                 b0_dir            = b0_dir
             )
             total = total + self.weight_physics*phys_loss
