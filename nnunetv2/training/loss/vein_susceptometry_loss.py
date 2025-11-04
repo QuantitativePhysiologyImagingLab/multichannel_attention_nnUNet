@@ -123,9 +123,16 @@ class PhysicsFieldLoss(nn.Module):
             vein_eval = vein_eval.float()
 
         # chi_blood (ppm)
-        chi_b = self._chi_blood if chi_blood_ppm is None else torch.tensor(float(chi_blood_ppm),
-                                                                           device=net_output.device,
-                                                                           dtype=net_output.dtype)
+        if chi_blood_ppm is None:
+            # self._chi_blood can be a float or a tensor — normalize to a tensor on the right device/dtype
+            if isinstance(self._chi_blood, torch.Tensor):
+                chi_b = self._chi_blood.to(device=net_output.device, dtype=net_output.dtype)
+            else:
+                chi_b = torch.tensor(float(self._chi_blood), device=net_output.device, dtype=net_output.dtype)
+        else:
+            chi_b = torch.tensor(float(chi_blood_ppm), device=net_output.device, dtype=net_output.dtype)
+
+        chi_b = chi_b.view(1, 1, 1, 1, 1)
 
         # Composite susceptibility (detach chi_qsm so we don't backprop into it)
         chi_total = (1.0 - vein_p.detach()) * chi_qsm.detach() + vein_p * chi_b.view(1,1,1,1,1)
