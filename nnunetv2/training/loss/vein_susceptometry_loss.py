@@ -112,15 +112,15 @@ class PhysicsFieldLoss(nn.Module):
         B_meas  = target[:, 1:2]                    # (B,1,X,Y,Z), ppm
 
         if brain_mask is None:
-            brain_mask = (chi_qsm != 0).float()
+            brain_mask = (chi_qsm != 0).to(net_output.dtype)
         else:
-            brain_mask = brain_mask.float()
+            brain_mask = brain_mask.to(net_output.dtype)
 
         # choose eval mask: provided or predicted (hard)
         if vein_eval is None:
-            vein_eval = (vein_p >= 0.5).float()
+            vein_eval = (vein_p >= 0.5).to(net_output.dtype)
         else:
-            vein_eval = vein_eval.float()
+            vein_eval = vein_eval.to(net_output.dtype)
 
         # chi_blood (ppm)
         if chi_blood_ppm is None:
