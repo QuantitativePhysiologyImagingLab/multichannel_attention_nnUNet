@@ -146,10 +146,10 @@ class PhysicsFieldLoss(nn.Module):
 
         chi_b = chi_b.view(1, 1, 1, 1, 1)
 
-        print("vein_eval ", vein_eval.shape)
-        print("chi_qsm ", chi_qsm.shape)
-        print("vein_p ", vein_p.shape)
-        print("chi_b ", chi_b.shape)
+        # print("vein_eval ", vein_eval.shape)
+        # print("chi_qsm ", chi_qsm.shape)
+        # print("vein_p ", vein_p.shape)
+        # print("chi_b ", chi_b.shape)
 
         # Composite susceptibility (detach chi_qsm so we don't backprop into it)
         chi_total = (1.0 - vein_eval.detach()) * chi_qsm.detach() + vein_eval.detach()*vein_p * chi_b.view(1,1,1,1,1)
@@ -187,6 +187,8 @@ class PhysicsFieldLoss(nn.Module):
              self.lambdas['mae']  * mae_masked +
              self.lambdas['tail'] * top10 +
              self.lambdas['sign'] * sign_hinge)
+        
+        print(L)
 
         metrics = {
             'loss_total': L.detach(),
