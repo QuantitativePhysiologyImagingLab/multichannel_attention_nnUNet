@@ -1006,11 +1006,15 @@ class nnUNetTrainerPhysicsWithAttention(nnUNetTrainer):
             foreground_labels: Union[Tuple[int, ...], List[int]] = None,
             regions: List[Union[List[int], Tuple[int, ...], int]] = None,
             ignore_label: int = None,
+            preprocessed_dataset_folder: str = ""
     ) -> BasicTransform:
         transforms = []
-        transforms.append(
-            RemoveLabelTansform(-1, 0)
-        )
+
+        # If your loss/network ever expects B0 in the sample dict (even without aug),
+        # keep this; otherwise you can omit it safely.
+        transforms.append(AttachB0DirFromProps(preprocessed_dataset_folder))
+
+        transforms.append(RemoveLabelTansform(-1, 0))
 
         if is_cascaded:
             transforms.append(
@@ -1022,7 +1026,6 @@ class nnUNetTrainerPhysicsWithAttention(nnUNetTrainer):
             )
 
         if regions is not None:
-            # the ignore label must also be converted
             transforms.append(
                 ConvertSegmentationToRegionsTransform(
                     regions=list(regions) + [ignore_label] if ignore_label is not None else regions,
@@ -1032,6 +1035,7 @@ class nnUNetTrainerPhysicsWithAttention(nnUNetTrainer):
 
         if deep_supervision_scales is not None:
             transforms.append(DownsampleSegForDSTransform(ds_scales=deep_supervision_scales))
+
         return ComposeTransforms(transforms)
 
     def set_deep_supervision_enabled(self, enabled: bool):
