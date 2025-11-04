@@ -91,6 +91,7 @@ class AttachB0DirFromProps(BasicTransform):
     def __call__(self, **data_dict):
         # nnU-Net v2 data_dict has 'keys' listing the case ids for this sample
         # (1 per sample before collate)
+        print(list(data_dict.keys()))
         case_key = data_dict['keys'][0]
         if case_key in self._cache:
             b0 = self._cache[case_key]
