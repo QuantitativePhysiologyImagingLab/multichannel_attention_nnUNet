@@ -1153,7 +1153,7 @@ class nnUNetTrainerPhysicsWithAttention(nnUNetTrainer):
         with autocast(self.device.type, enabled=True) if self.device.type == 'cuda' else dummy_context():
             output = self.network(data)
             # del data
-            l = self.loss(output, data, b0_dir=b0_dirs)
+            l = self.loss(output, target, data, b0_dir=b0_dirs)
 
 
         if self.grad_scaler is not None:
