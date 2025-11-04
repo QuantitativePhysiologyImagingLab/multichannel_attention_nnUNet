@@ -1132,12 +1132,12 @@ class nnUNetTrainerPhysicsWithAttention(nnUNetTrainer):
         self.logger.log('lrs', self.optimizer.param_groups[0]['lr'], self.current_epoch)
 
     def train_step(self, batch: dict) -> dict:
+        print(list(batch.keys()))
         data = batch['data']
         target = batch['target']
         phase = data[:, 1:2, ...]
         keys  = batch['keys']       # list of case identifiers length B
 
-        print(list(batch.keys()))
 
         # build (B,3) tensor of B0 directions in voxel coords
         b0_dirs = torch.stack([self._get_case_B0(k) for k in keys], dim=0).to(self.device)
