@@ -17,7 +17,7 @@ class VeinPhysics_DC_and_CE_loss(nn.Module):
         :param weight_ce:
         :param weight_dice:
         """
-        super(DC_and_CE_loss, self).__init__()
+        super(VeinPhysics_DC_and_CE_loss, self).__init__()
         if ignore_label is not None:
             ce_kwargs['ignore_index'] = ignore_label
 
@@ -80,6 +80,8 @@ class VeinPhysics_DC_and_CE_loss(nn.Module):
                 b0_dir            = b0_dir
             )
             total = total + self.weight_physics*phys_loss
+            
+        return total
 
 
 class DC_and_CE_loss(nn.Module):

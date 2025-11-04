@@ -551,15 +551,6 @@ class nnUNetTrainerPhysicsWithAttention(nnUNetTrainer):
                             ignore_label=self.label_manager.ignore_label is not None,
                             dice_class=MemoryEfficientSoftDiceLoss)
 
-        '''
-        
-        i think that direction is the affine how to use it in my b0
-
-        >> props['sitk_stuff']
-        {'spacing': (0.6000000238418579, 0.6000000238418579, 0.6000000834465027), 'origin': (-87.04582214355469, 36.72642517089844, -87.85877990722656), 'direction': (0.9961066557718066, 0.08815628156742629, 0.0, 0.08572051848748766, -0.9685841503804856, 0.23344532351690625, -0.02057967534592967, 0.23253647811024747, 0.9723699300822126)}
-
-        '''
-
         if self._do_i_compile():
             loss.dc = torch.compile(loss.dc)
 
