@@ -89,18 +89,20 @@ class AttachB0DirFromProps(BasicTransform):
         return (b0_voxel / n).astype(np.float32)
 
     def __call__(self, **data_dict):
-        # nnU-Net v2 data_dict has 'keys' listing the case ids for this sample
-        # (1 per sample before collate)
-        print(list(data_dict.keys()))
-        case_key = data_dict['keys'][0]
-        if case_key in self._cache:
-            b0 = self._cache[case_key]
-        else:
-            with open(join(self.preprocessed_folder, f"{case_key}.pkl"), 'rb') as f:
+        # If 'keys' isn’t available at this stage, just pass through.
+        klist = data_dict.get('keys', None)
+        if not klist:
+            return data_dict
+
+        case_key = klist[0]
+        b0 = self._cache.get(case_key)
+        if b0 is None:
+            import pickle, os
+            with open(os.path.join(self.preprocessed_folder, f"{case_key}.pkl"), "rb") as f:
                 props = pickle.load(f)
             b0 = self._compute_b0_voxel(props['sitk_stuff']['direction'])
             self._cache[case_key] = b0
-        data_dict['b0_dir'] = b0  # (3,)
+        data_dict['b0_dir'] = b0
         return data_dict
         
 def _rotmat_xyz(rx, ry, rz):
