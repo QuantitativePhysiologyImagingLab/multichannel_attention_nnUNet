@@ -60,12 +60,13 @@ class VeinPhysics_DC_and_CE_loss(nn.Module):
 
     def forward(self,
                 net_output: torch.Tensor,
+                target: torch.Tensor,
                 data: torch.Tensor,
                 b0_dir: torch.Tensor = None) -> torch.Tensor:
         """
         net_output: (B, C, X, Y, Z) logits
         target    : (B, 1 or 2, X, Y, Z) (2 if includes chi/localfield channels for physics)
-        phase_target: optional measured local field (B,1,...) if your PhysicsFieldLoss uses it separately
+        data      : (B, C, X, Y, Z) input data tensor
         b0_dir    : (B,3) or (3,) unit vector(s) in image axes
         """
         # ---- ignore-label handling for Dice/CE ----
@@ -99,7 +100,7 @@ class VeinPhysics_DC_and_CE_loss(nn.Module):
 
             phys_loss, _metrics = self.vpl(
                 net_output        = net_output,
-                data              = data,
+                data               = data,
                 b0_dir            = b0_dir
             )
             total = total + self.weight_physics*phys_loss
