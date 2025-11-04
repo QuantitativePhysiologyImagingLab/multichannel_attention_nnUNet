@@ -96,7 +96,7 @@ class PhysicsFieldLoss(nn.Module):
         field = torch.fft.ifftn(field_k, dim=(-3,-2,-1)).real
         return field
 
-    def _resize_like(x, ref, is_mask=False):
+    def _resize_like(self, x, ref, is_mask=False):
         if x.shape[2:] == ref.shape[2:]:
             return x
         mode = 'nearest' if is_mask else 'trilinear'
@@ -130,9 +130,9 @@ class PhysicsFieldLoss(nn.Module):
         else:
             vein_eval = vein_eval.to(net_output.dtype)
 
-        chi_qsm    = _resize_like(chi_qsm,    net_output, is_mask=False)
-        B_meas     = _resize_like(B_meas,     net_output, is_mask=False)
-        brain_mask = _resize_like(brain_mask, net_output, is_mask=True)
+        chi_qsm    = self._resize_like(chi_qsm,    net_output, is_mask=False)
+        B_meas     = self._resize_like(B_meas,     net_output, is_mask=False)
+        brain_mask = self._resize_like(brain_mask, net_output, is_mask=True)
 
         # chi_blood (ppm)
         if chi_blood_ppm is None:
