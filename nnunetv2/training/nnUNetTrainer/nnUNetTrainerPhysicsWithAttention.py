@@ -7,7 +7,10 @@ import warnings
 from copy import deepcopy
 from datetime import datetime
 from time import time, sleep
+
 from typing import Tuple, Union, List
+from types import SimpleNamespace
+from typing import Any
 
 import pickle
 
@@ -69,6 +72,52 @@ from nnunetv2.utilities.label_handling.label_handling import convert_labelmap_to
 from nnunetv2.utilities.plans_handling.plans_handler import PlansManager
 
 from nnunetv2.training.nnUNetTrainer.nnUNetTrainer import nnUNetTrainer
+
+# ---- helper: independent of self ----
+def _safe_get_patch_size(configuration_manager=None, plans_manager=None, model_dir=None):
+    # 1) try direct attr on configuration_manager
+    if configuration_manager is not None:
+        ps = getattr(configuration_manager, "patch_size", None)
+        if ps is not None:
+            return tuple(ps)
+
+        # some builds tuck it into dict-like fields
+        for k in ("architecture_kwargs", "network_arch_kwargs", "config", "configuration"):
+            d = getattr(configuration_manager, k, None)
+            if isinstance(d, dict) and d.get("patch_size") is not None:
+                return tuple(d["patch_size"])
+
+    # 2) try plans_manager
+    if plans_manager is not None:
+        try:
+            conf_name = getattr(plans_manager, "configuration_name", None)
+            plans = getattr(plans_manager, "plans", None)
+            if isinstance(plans, dict):
+                confs = plans.get("configurations") or plans.get("configurations_dict") or {}
+                conf = confs.get(conf_name) or {}
+                if conf.get("patch_size") is not None:
+                    return tuple(conf["patch_size"])
+                if plans.get("patch_size") is not None:
+                    return tuple(plans["patch_size"])
+        except Exception:
+            pass
+
+    # 3) last resort: read nnUNetPlans.json from model dir
+    if model_dir:
+        import os, json
+        pj = os.path.join(model_dir, "nnUNetPlans.json")
+        if os.path.isfile(pj):
+            with open(pj, "r") as f:
+                plans = json.load(f)
+            conf_name = getattr(plans_manager, "configuration_name", None) if plans_manager else None
+            confs = plans.get("configurations") or {}
+            conf = confs.get(conf_name) or {}
+            if conf.get("patch_size") is not None:
+                return tuple(conf["patch_size"])
+            if plans.get("patch_size") is not None:
+                return tuple(plans["patch_size"])
+
+    raise RuntimeError("patch_size not found in configuration_manager/plans/nnUNetPlans.json.")
 
 class AttachB0DirFromProps(BasicTransform):
     """
@@ -439,63 +488,67 @@ class nnUNetTrainerPhysicsWithAttention(nnUNetTrainer):
             save_json(dct, join(self.output_folder, "debug.json"))
 
     
-    def build_network_architecture(self, architecture_class_name: str,
-                                   arch_init_kwargs: dict,
-                                   arch_init_kwargs_req_import: Union[List[str], Tuple[str, ...]],
-                                   num_input_channels: int,
-                                   num_output_channels: int,
-                                   enable_deep_supervision: bool = True) -> nn.Module:
-        """
-        This is where you build the architecture according to the plans. There is no obligation to use
-        get_network_from_plans, this is just a utility we use for the nnU-Net default architectures. You can do what
-        you want. Even ignore the plans and just return something static (as long as it can process the requested
-        patch size)
-        but don't bug us with your bugs arising from fiddling with this :-P
-        This is the function that is called in inference as well! This is needed so that all network architecture
-        variants can be loaded at inference time (inference will use the same nnUNetTrainer that was used for
-        training, so if you change the network architecture during training by deriving a new trainer class then
-        inference will know about it).
-
-        If you need to know how many segmentation outputs your custom architecture needs to have, use the following snippet:
-        > label_manager = plans_manager.get_label_manager(dataset_json)
-        > label_manager.num_segmentation_heads
-        (why so complicated? -> We can have either classical training (classes) or regions. If we have regions,
-        the number of outputs is != the number of classes. Also there is the ignore label for which no output
-        should be generated. label_manager takes care of all that for you.)
-
-        """
-
-        # Import your attention net
+    @staticmethod
+    def build_network_architecture(
+        architecture_class_name: str,
+        arch_init_kwargs: dict,
+        arch_init_kwargs_req_import,
+        num_input_channels: int,
+        num_output_channels: int,
+        enable_deep_supervision: bool = True,
+        **_ignored,   # swallow anything unexpected without error
+    ) -> nn.Module:
+        # Your custom net
         from nnunetv2.training.nnUNetTrainer.nnUNetTrainerWithAttention import (
             PriorGatedUNetWithAttentionInfer,
         )
 
-        # Get patch_size robustly from your configuration
-        if hasattr(self.configuration_manager, "patch_size") and self.configuration_manager.patch_size is not None:
-            patch_size = tuple(self.configuration_manager.patch_size)
-        else:
-            raise RuntimeError("patch_size not found on configuration_manager; required by PriorGatedUNetWithAttention.")
+        # Only use what predict() actually passes. If you want patch_size, try to read it
+        # from arch_init_kwargs, but allow it to be missing.
+        patch_size = None
+        if isinstance(arch_init_kwargs, dict):
+            patch_size = arch_init_kwargs.get('patch_size', None)
 
+        net = PriorGatedUNetWithAttentionInfer(
+            in_channels=num_input_channels,
+            out_channels=num_output_channels,
+            patch_size=patch_size,                 # can be None
+            deep_supervision=bool(enable_deep_supervision),
+        )
+        # Keep DS flags consistent
+        for attr in ('do_ds', 'deep_supervision', 'enable_deep_supervision'):
+            if hasattr(net, attr):
+                setattr(net, attr, bool(enable_deep_supervision))
+        return net
+
+    @staticmethod
+    def _build_network_architecture_impl(
+        configuration_manager,                 # <--- this is the SimpleNamespace you pass in
+        architecture_class_name: str,
+        arch_init_kwargs: dict,
+        arch_init_kwargs_req_import,
+        num_input_channels: int,
+        num_output_channels: int,
+        enable_deep_supervision: bool = True,
+        plans_manager=None,
+        output_folder=None
+    ):
+        # resolve patch size safely
+        patch_size = _safe_get_patch_size(configuration_manager, plans_manager, output_folder)
+
+        from nnunetv2.training.nnUNetTrainer.nnUNetTrainerWithAttention import (
+            PriorGatedUNetWithAttentionInfer,
+        )
         net = PriorGatedUNetWithAttentionInfer(
             in_channels=num_input_channels,
             out_channels=num_output_channels,
             patch_size=patch_size,
             deep_supervision=bool(enable_deep_supervision),
         )
-        # synchronize DS flags (your trainer toggles these later as well)
         for attr in ("do_ds", "deep_supervision", "enable_deep_supervision"):
             if hasattr(net, attr):
                 setattr(net, attr, bool(enable_deep_supervision))
         return net
-
-        # return get_network_from_plans(
-        #     architecture_class_name,
-        #     arch_init_kwargs,
-        #     arch_init_kwargs_req_import,
-        #     num_input_channels,
-        #     num_output_channels,
-        #     allow_init=True,
-        #     deep_supervision=enable_deep_supervision)
 
     def _get_deep_supervision_scales(self):
         if self.enable_deep_supervision:
