@@ -2,6 +2,7 @@ import torch
 from nnunetv2.training.loss.dice import SoftDiceLoss, MemoryEfficientSoftDiceLoss
 from nnunetv2.training.loss.robust_ce_loss import RobustCrossEntropyLoss, TopKLoss
 from nnunetv2.training.loss.vein_susceptometry_loss import PhysicsFieldLoss
+from nnunetv2.training.loss.tversky_loss import FocalTverskyLoss
 from nnunetv2.utilities.helpers import softmax_helper_dim1
 from torch import nn
 
@@ -48,8 +49,8 @@ class DeepSupervisionWrapperPassKwargs(nn.Module):
         return total
 
 class VeinPhysics_DC_and_CE_loss(nn.Module):
-    def __init__(self, soft_dice_kwargs, ce_kwargs, vpl_kwargs, weight_ce=1, weight_dice=1, weight_physics=10, ignore_label=None,
-                 dice_class=SoftDiceLoss):
+    def __init__(self, soft_dice_kwargs, ce_kwargs, vpl_kwargs, weight_ce=1, weight_dice=0.5, 
+                 weight_tversky=1, weight_physics=20, ignore_label=None, dice_class=SoftDiceLoss):
         """
         Weights for CE and Dice do not need to sum to one. You can set whatever you want.
         :param soft_dice_kwargs:
@@ -66,11 +67,13 @@ class VeinPhysics_DC_and_CE_loss(nn.Module):
         self.weight_dice = weight_dice
         self.weight_ce = weight_ce
         self.weight_physics = weight_physics
+        self.weight_tversky = weight_tversky
         self.ignore_label = ignore_label
 
         self.ce = RobustCrossEntropyLoss(**ce_kwargs)
         self.dc = dice_class(apply_nonlin=softmax_helper_dim1, **soft_dice_kwargs)
         self.vpl = PhysicsFieldLoss(**vpl_kwargs)
+        self.tversky = FocalTverskyLoss(alpha=0.3, beta=0.7, gamma=0.75)
 
     def forward(self,
                 net_output: torch.Tensor,
@@ -95,9 +98,10 @@ class VeinPhysics_DC_and_CE_loss(nn.Module):
 
         # ---- CE & Dice ----
         dc_loss = self.dc(net_output, target_dice, loss_mask=mask) if (self.weight_dice != 0 and self.dc is not None) else 0.0
+        tversky_loss = self.tversky(net_output, target_dice)
         ce_loss = self.ce(net_output, target_dice[:, 0]) if (self.weight_ce != 0 and self.ce is not None and (self.ignore_label is None or num_fg > 0)) else 0.0
 
-        total = self.weight_ce * ce_loss + self.weight_dice * dc_loss
+        total = self.weight_ce * ce_loss + self.weight_dice * dc_loss + self.weight_tversky*tversky_loss
 
         # ---- Physics term (optional but enabled here) ----
         if self.vpl is not None:
