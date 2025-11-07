@@ -1,7 +1,6 @@
 import torch
 from torch import nn
 
-# ---- Add Tversky loss class ----
 class FocalTverskyLoss(nn.Module):
     def __init__(self, alpha=0.3, beta=0.7, gamma=0.75, eps=1e-6):
         super().__init__()
