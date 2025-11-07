@@ -253,7 +253,7 @@ class FrangiLoss(nn.Module):
         # light blur for stability of Hessian on probability map
         P_blur = F.avg_pool3d(F.pad(vein_p, (1,1,1,1,1,1), mode='reflect'), kernel_size=3, stride=1)
         V_P, _ = frangi_3d(
-            P_blur, self.sig_mask, 0.35, 0.8, 5.0, True, False
+            P_blur, self.sig_mask, 0.8, 0.8, 4.0, True, False
         )
 
         # --- Core objectives ---
