@@ -3,6 +3,7 @@ from nnunetv2.training.loss.dice import SoftDiceLoss, MemoryEfficientSoftDiceLos
 from nnunetv2.training.loss.robust_ce_loss import RobustCrossEntropyLoss, TopKLoss
 from nnunetv2.training.loss.vein_susceptometry_loss import PhysicsFieldLoss
 from nnunetv2.training.loss.tversky_loss import FocalTverskyLoss
+from nnunetv2.training.loss.frangi_loss import FrangiLoss
 from nnunetv2.utilities.helpers import softmax_helper_dim1
 from torch import nn
 
@@ -46,6 +47,100 @@ class DeepSupervisionWrapperPassKwargs(nn.Module):
             if float(wi) == 0.0:
                 continue
             total = total + float(wi) * self.base_loss(out_i, tgt_i, *args, **kwargs)
+        return total
+
+class VeinPhysics_Frangi_DC_and_CE_loss(nn.Module):
+    def __init__(self, soft_dice_kwargs, ce_kwargs, vpl_kwargs, weight_ce=1, weight_dice=0.5, 
+                 weight_tversky=1, weight_physics=20, weight_frangi=1, ignore_label=None, dice_class=SoftDiceLoss):
+        """
+        Weights for CE and Dice do not need to sum to one. You can set whatever you want.
+        :param soft_dice_kwargs:
+        :param ce_kwargs:
+        :param aggregate:
+        :param square_dice:
+        :param weight_ce:
+        :param weight_dice:
+        """
+        super(VeinPhysics_DC_and_CE_loss, self).__init__()
+        if ignore_label is not None:
+            ce_kwargs['ignore_index'] = ignore_label
+
+        self.weight_dice = weight_dice
+        self.weight_ce = weight_ce
+        self.weight_physics = weight_physics
+        self.weight_tversky = weight_tversky
+        self.weight_frangi = weight_frangi
+        self.ignore_label = ignore_label
+
+        self.ce = RobustCrossEntropyLoss(**ce_kwargs)
+        self.dc = dice_class(apply_nonlin=softmax_helper_dim1, **soft_dice_kwargs)
+        self.vpl = PhysicsFieldLoss(**vpl_kwargs)
+        self.tversky = FocalTverskyLoss(alpha=0.3, beta=0.7, gamma=0.75)
+        self.frangi = FrangiLoss()
+
+    def forward(self,
+                net_output: torch.Tensor,
+                target: torch.Tensor,
+                data: torch.Tensor,
+                b0_dir: torch.Tensor = None) -> torch.Tensor:
+        """
+        net_output: (B, C, X, Y, Z) logits
+        target    : (B, 1 or 2, X, Y, Z) (2 if includes chi/localfield channels for physics)
+        data      : (B, C, X, Y, Z) input data tensor
+        b0_dir    : (B,3) or (3,) unit vector(s) in image axes
+        """
+        # ---- ignore-label handling for Dice/CE ----
+        if self.ignore_label is not None:
+            assert target.shape[1] >= 1, "target needs at least a class channel"
+            mask = target[:, :1] != self.ignore_label
+            target_dice = torch.where(mask, target[:, :1], 0)
+            num_fg = mask.sum()
+        else:
+            mask = None
+            target_dice = target[:, :1] if target.shape[1] >= 1 else target  # keep class channel for CE/Dice
+
+        # ---- CE & Dice ----
+        dc_loss = self.dc(net_output, target_dice, loss_mask=mask) if (self.weight_dice != 0 and self.dc is not None) else 0.0
+        tversky_loss = self.tversky(net_output, target_dice)
+        ce_loss = self.ce(net_output, target_dice[:, 0]) if (self.weight_ce != 0 and self.ce is not None and (self.ignore_label is None or num_fg > 0)) else 0.0
+
+        total = self.weight_ce * ce_loss + self.weight_dice * dc_loss + self.weight_tversky*tversky_loss
+
+        # ---- Physics term ----
+        if self.vpl is not None:
+            # normalize b0_dir shape
+            if b0_dir is not None:
+                if b0_dir.ndim == 1:  # (3,)
+                    # broadcast to batch
+                    B = net_output.shape[0]
+                    b0_dir = b0_dir.view(1, 3).repeat(B, 1).to(net_output.device, dtype=net_output.dtype)
+                elif b0_dir.ndim == 2:  # (B,3)
+                    b0_dir = b0_dir.to(net_output.device, dtype=net_output.dtype)
+                else:
+                    raise ValueError("b0_dir must be shape (3,) or (B,3)")
+
+            phys_loss, _metrics = self.vpl(
+                net_output        = net_output,
+                data               = data,
+                b0_dir            = b0_dir
+            )
+            total = total + self.weight_physics*phys_loss
+
+        # ---- Frangi term ----
+        if self.frangi is not None:
+
+            frangi_loss = self.frangi(
+                net_output        = net_output,
+                data               = data
+            )
+            total = total + self.weight_frangi*frangi_loss
+
+        print("CE loss: ", ce_loss)
+        print("DC loss: ", dc_loss)
+        print("Phys loss: ", phys_loss)
+        print("Tversky: ", tversky_loss)
+        print("Frangi: ", frangi_loss)
+
         return total
 
 class VeinPhysics_DC_and_CE_loss(nn.Module):
