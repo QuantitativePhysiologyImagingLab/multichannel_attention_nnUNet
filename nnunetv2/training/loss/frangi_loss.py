@@ -217,51 +217,56 @@ class FrangiLoss(nn.Module):
     def __init__(self):
         super().__init__()
         self.sig_img  = (0.6, 0.9, 1.2, 1.8)  # image scales
-        self.sig_mask = (0.3, 0.5, 0.8)       # mask/prob scales
-        self.alpha_tau = (6.0, 0.40)          # gate sharpness/midpoint
+        self.sig_mask = (0.01, 0.2, 0.3)       # mask/prob scales
+        self.alpha_tau = (6.0, 1E-5)          # gate sharpness/midpoint
 
-    def forward(self, I_chi: Tensor, P: Tensor, Y: Optional[Tensor] = None) -> Tensor:
+    def forward(self, net_output, data):
+        """
+        net_output: (B,C,X,Y,Z)
+        target:     (B,2,X,Y,Z)  [0]=chi_qsm_ppm, [1]=localfield_ppm, [2]=Frangi_vesselness
+        """
+        # Cast priors to the net’s dtype/device
+        chi_qsm = data[:, 0].to(device=net_output.device, dtype=net_output.dtype)   # ppm
+        V_I  = data[:, 2].to(device=net_output.device, dtype=net_output.dtype)   # frangi QSM
+
+        brain_mask = (chi_qsm != 0).to(net_output.dtype)
+
+        probs = torch.softmax(net_output, dim=1)  # (B,C,X,Y,Z)
+        vein_p = probs[:, self.vein_channel:self.vein_channel+1]  # (B,1,X,Y,Z)
+        vein_eval = (vein_p >= 0.5).to(net_output.dtype)
+        valid = (vein_eval > 0) & (brain_mask > 0)
+
+        chi_qsm    = self._resize_like(chi_qsm, net_output, is_mask=False)
+        V_I     = self._resize_like(V_I, net_output, is_mask=False)
+        brain_mask = self._resize_like(brain_mask, net_output, is_mask=True)
+
         alpha, tau = self.alpha_tau
 
         # --- Frangi on image (prior, no grads) ---
         with torch.no_grad():
-            V_I, axis_I, s_map = frangi_3d(
-                I_chi, self.sig_img, 0.5, 0.5, 15.0, True, True
-            )
-            # physics sign gate (down-weight chi <= 0)
-            gate_phys = torch.sigmoid(8.0 * (I_chi - 0.0))
-            V_gate = torch.sigmoid(alpha * (V_I - tau)) * gate_phys
+
+            V_gate = torch.sigmoid(alpha * (V_I - tau))
             # tiny dilation to bridge small breaks
             V_gate = F.max_pool3d(V_gate, kernel_size=3, stride=1, padding=1)
 
         # --- Frangi on prediction (differentiable) ---
         # light blur for stability of Hessian on probability map
-        P_blur = F.avg_pool3d(F.pad(P, (1,1,1,1,1,1), mode='reflect'), kernel_size=3, stride=1)
+        P_blur = F.avg_pool3d(F.pad(vein_p, (1,1,1,1,1,1), mode='reflect'), kernel_size=3, stride=1)
         V_P, _ = frangi_3d(
             P_blur, self.sig_mask, 0.35, 0.8, 5.0, True, False
         )
 
         # --- Core objectives ---
         # Reward tubeness where image suggests vessels
-        loss_selfV = -(V_P * V_gate).mean()
+        loss_selfV = -((V_P * V_gate)[valid]).mean()
         # One-sided completion hinge: push V_P >= V_I + margin inside gate
-        margin = 0.05
-        loss_hinge = (torch.relu((V_I + margin) - V_P) * V_gate).mean()
+        margin = 0.1
+        loss_hinge = ((torch.relu((V_I+margin) - V_P) * V_gate)[valid]).mean()
         # Suppress predictions where image is confidently non-tubular
         non_vessel = (V_I < 0.05).float()
         denom = non_vessel.sum().clamp_min(1)
-        loss_bg = (P * non_vessel).sum() / denom
-        # Mild area control
-        loss_area = P.mean()
-
-        # Optional weak supervised term that doesn't punish completions as much
-        if Y is not None:
-            eps = 1e-6
-            w_neg = 1.0 - 0.5 * V_gate
-            loss_sup = ( -Y*torch.log(P+eps) - w_neg*(1-Y)*torch.log(1-P+eps) ).mean()
-        else:
-            loss_sup = P.new_tensor(0.0)
+        loss_bg = (vein_p * non_vessel).sum() / denom
 
         # Weights (tune as needed)
-        loss = (1.0*loss_selfV + 0.5*loss_hinge + 0.3*loss_bg + 0.05*loss_area + 1.0*loss_sup)
+        loss = (5*loss_selfV + 10*loss_hinge + 10*loss_bg)
         return loss
