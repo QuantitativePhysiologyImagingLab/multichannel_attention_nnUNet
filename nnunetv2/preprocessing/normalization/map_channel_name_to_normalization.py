@@ -11,6 +11,7 @@ channel_name_to_normalization_mapping = {
     'rgb_to_0_1': RGBTo01Normalization,
     'qsm': NoNormalization,
     'phase': NoNormalization,
+    'frangi': NoNormalization,
 }
 
 
