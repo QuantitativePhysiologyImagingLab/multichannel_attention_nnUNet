@@ -219,6 +219,7 @@ class FrangiLoss(nn.Module):
         self.sig_img  = (0.6, 0.9, 1.2, 1.8)  # image scales
         self.sig_mask = (0.01, 0.2, 0.3)       # mask/prob scales
         self.alpha_tau = (6.0, 1E-5)          # gate sharpness/midpoint
+        self.vein_channel = 1
 
     def forward(self, net_output, data):
         """
