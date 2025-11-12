@@ -220,7 +220,13 @@ class FrangiLoss(nn.Module):
         self.sig_mask = (0.01, 0.2, 0.3)       # mask/prob scales
         self.alpha_tau = (6.0, 1E-5)          # gate sharpness/midpoint
         self.vein_channel = 1
-
+        
+    def _resize_like(self, x, ref, is_mask=False):
+        if x.shape[2:] == ref.shape[2:]:
+            return x
+        mode = 'nearest' if is_mask else 'trilinear'
+        return F.interpolate(x, size=ref.shape[2:], mode=mode, align_corners=False if mode=='trilinear' else None)
+    
     def forward(self, net_output, data):
         """
         net_output: (B,C,X,Y,Z)
