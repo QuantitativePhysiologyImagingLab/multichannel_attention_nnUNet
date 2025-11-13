@@ -132,7 +132,14 @@ def _frangi_3d_single(
     H = H.view(B, 1, D_, H_, W_, 3, 3).flatten(1, 4)  # (B, D*H*W, 3, 3)
 
     # Eigendecomposition
-    evals, evecs = torch.linalg.eigh(H)  # (B, D*H*W, 3), (B, D*H*W, 3, 3)
+    orig_dtype = H.dtype
+    H32 = H.to(torch.float32)
+
+    evals32, evecs32 = torch.linalg.eigh(H32)  # (B, N, 3), (B, N, 3, 3)
+
+    # cast back
+    evals = evals32.to(orig_dtype)
+    evecs = evecs32.to(orig_dtype)
 
     # Sort by |lambda| ascending
     idx = torch.argsort(evals.abs(), dim=-1, stable=True)
