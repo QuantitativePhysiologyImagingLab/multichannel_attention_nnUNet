@@ -135,9 +135,14 @@ def _frangi_3d_single(
     orig_dtype = H.dtype
     H32 = H.to(torch.float32)
 
-    evals32, evecs32 = torch.linalg.eigh(H32)  # (B, N, 3), (B, N, 3, 3)
+    # replace NaN / Inf with finite values
+    H32 = torch.nan_to_num(H32, nan=0.0, posinf=1e4, neginf=-1e4)
 
-    # cast back
+    # optionally clamp extreme values (defensive)
+    H32 = H32.clamp(min=-1e4, max=1e4)
+
+    evals32, evecs32 = torch.linalg.eigh(H32)
+
     evals = evals32.to(orig_dtype)
     evecs = evecs32.to(orig_dtype)
 
