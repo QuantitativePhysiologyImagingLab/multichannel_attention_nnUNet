@@ -95,6 +95,78 @@ def _hessian_3d(I: Tensor, sigma: float) -> Tuple[Tensor, Tensor, Tensor, Tensor
     I_xy = s2*I_xy; I_xz = s2*I_xz; I_yz = s2*I_yz
     return I_xx, I_yy, I_zz, I_xy, I_xz, I_yz
 
+def eigh_3x3_symmetric(H: torch.Tensor):
+    """
+    H: (B, N, 3, 3) symmetric
+    Returns:
+       evals: (B, N, 3)
+       evecs: (B, N, 3, 3)
+    """
+    # extract components
+    a = H[...,0,0]
+    b = H[...,1,1]
+    c = H[...,2,2]
+    d = H[...,0,1]
+    e = H[...,0,2]
+    f = H[...,1,2]
+
+    # --- eigenvalues using analytic cubic solution (guaranteed real) ---
+    # trace
+    m = (a + b + c) / 3.0
+
+    # centered matrix entries
+    a_ = a - m
+    b_ = b - m
+    c_ = c - m
+
+    # p^2 = 1/6 * (sum of squares of centered diag + 2*d^2 + 2*e^2 + 2*f^2)
+    p2 = (a_*a_ + b_*b_ + c_*c_ + 2*(d*d + e*e + f*f)) / 6.0
+    p = torch.sqrt(p2.clamp_min(1e-12))
+
+    # build matrix B = (1/p) * (H - mI)
+    B00 = a_ / p
+    B11 = b_ / p
+    B22 = c_ / p
+    B01 = d / p
+    B02 = e / p
+    B12 = f / p
+
+    # determinant of B
+    detB = (
+        B00*(B11*B22 - B12*B12)
+        - B01*(B01*B22 - B12*B02)
+        + B02*(B01*B12 - B11*B02)
+    )
+
+    # clamp for numerical stability
+    detB = detB.clamp(-1.0, 1.0)
+
+    phi = torch.acos(detB) / 3.0
+
+    # eigenvalues (closed form)
+    eig1 = m + 2*p*torch.cos(phi + 0)
+    eig3 = m + 2*p*torch.cos(phi + 2*torch.pi/3)
+    eig2 = 3*m - eig1 - eig3     # ensures ordering
+
+    # sort ascending by absolute magnitude (Frangi convention)
+    evals = torch.stack([eig1, eig2, eig3], dim=-1)
+
+    # --- eigenvectors ---
+    # get eigenvectors for each eigenvalue by solving (H - λI)v = 0
+    # do it with torch.linalg.cross + normalization
+    evecs = []
+    for i in range(3):
+        lam = evals[..., i][...,None,None]
+        M = H - lam * torch.eye(3, device=H.device, dtype=H.dtype)
+
+        # pick two rows and take cross product
+        v = torch.linalg.cross(M[...,0,:], M[...,1,:])
+        v = v / (v.norm(dim=-1, keepdim=True).clamp_min(1e-12))
+        evecs.append(v)
+
+    evecs = torch.stack(evecs, dim=-1)  # (B,N,3,3)
+    return evals, evecs
+
 # -----------------------------
 # Frangi 3D (single scale)
 # -----------------------------
@@ -139,9 +211,9 @@ def _frangi_3d_single(
     H32 = torch.nan_to_num(H32, nan=0.0, posinf=1e4, neginf=-1e4)
 
     # optionally clamp extreme values (defensive)
-    H32 = H32.clamp(min=-1e4, max=1e4)
+    H32 = H32.clamp(min=-1e8, max=1e4)
 
-    evals32, evecs32 = torch.linalg.eigh(H32)
+    evals32, evecs32 = eigh_3x3_symmetric(H)
 
     evals = evals32.to(orig_dtype)
     evecs = evecs32.to(orig_dtype)
