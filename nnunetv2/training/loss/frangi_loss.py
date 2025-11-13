@@ -321,15 +321,16 @@ class FrangiLoss(nn.Module):
         V_I  = data[:, 2:3].to(device=net_output.device, dtype=net_output.dtype)   # frangi QSM
 
         brain_mask = (chi_qsm != 0).to(net_output.dtype)
+        
+        chi_qsm    = self._resize_like(chi_qsm, net_output, is_mask=False)
+        V_I     = self._resize_like(V_I, net_output, is_mask=False)
+        brain_mask = self._resize_like(brain_mask, net_output, is_mask=True)
 
         probs = torch.softmax(net_output, dim=1)  # (B,C,X,Y,Z)
         vein_p = probs[:, self.vein_channel:self.vein_channel+1]  # (B,1,X,Y,Z)
         vein_eval = (vein_p >= 0.5).to(net_output.dtype)
         valid = (vein_eval > 0) & (brain_mask > 0)
 
-        chi_qsm    = self._resize_like(chi_qsm, net_output, is_mask=False)
-        V_I     = self._resize_like(V_I, net_output, is_mask=False)
-        brain_mask = self._resize_like(brain_mask, net_output, is_mask=True)
 
         alpha, tau = self.alpha_tau
 
