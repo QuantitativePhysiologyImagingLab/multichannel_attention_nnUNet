@@ -230,11 +230,11 @@ class FrangiLoss(nn.Module):
     def forward(self, net_output, data):
         """
         net_output: (B,C,X,Y,Z)
-        target:     (B,2,X,Y,Z)  [0]=chi_qsm_ppm, [1]=localfield_ppm, [2]=Frangi_vesselness
+        target:     (B,3,X,Y,Z)  [0]=chi_qsm_ppm, [1]=localfield_ppm, [2]=Frangi_vesselness
         """
         # Cast priors to the net’s dtype/device
-        chi_qsm = data[:, 0].to(device=net_output.device, dtype=net_output.dtype)   # ppm
-        V_I  = data[:, 2].to(device=net_output.device, dtype=net_output.dtype)   # frangi QSM
+        chi_qsm = data[:, 0:1].to(device=net_output.device, dtype=net_output.dtype)   # ppm
+        V_I  = data[:, 2:3].to(device=net_output.device, dtype=net_output.dtype)   # frangi QSM
 
         brain_mask = (chi_qsm != 0).to(net_output.dtype)
 
