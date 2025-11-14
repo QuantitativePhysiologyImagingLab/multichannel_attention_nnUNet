@@ -329,7 +329,7 @@ class FrangiLoss(nn.Module):
         probs = torch.softmax(net_output, dim=1)  # (B,C,X,Y,Z)
         vein_p = probs[:, self.vein_channel:self.vein_channel+1]  # (B,1,X,Y,Z)
         vein_eval = (vein_p >= 0.5).to(net_output.dtype)
-        valid = (vein_eval > 0) & (brain_mask > 0)
+        # valid = (vein_eval > 0) & (brain_mask > 0)
 
 
         alpha, tau = self.alpha_tau
@@ -340,6 +340,8 @@ class FrangiLoss(nn.Module):
             V_gate = torch.sigmoid(alpha * (V_I - tau))
             # tiny dilation to bridge small breaks
             V_gate = F.max_pool3d(V_gate, kernel_size=3, stride=1, padding=1)
+        
+        valid = (V_gate > 0.5) & (brain_mask > 0)
 
         # --- Frangi on prediction (differentiable) ---
         # light blur for stability of Hessian on probability map
