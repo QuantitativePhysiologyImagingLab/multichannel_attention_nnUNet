@@ -513,7 +513,7 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
             in_channels=num_input_channels,
             out_channels=num_output_channels,
             patch_size=patch_size,                 # can be None
-            deep_supervision=bool(enable_deep_supervision),
+            deep_supervision=True,
         )
         # Keep DS flags consistent
         for attr in ('do_ds', 'deep_supervision', 'enable_deep_supervision'):
@@ -543,7 +543,7 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
             in_channels=num_input_channels,
             out_channels=num_output_channels,
             patch_size=patch_size,
-            deep_supervision=bool(enable_deep_supervision),
+            deep_supervision=True,
         )
         for attr in ("do_ds", "deep_supervision", "enable_deep_supervision"):
             if hasattr(net, attr):
