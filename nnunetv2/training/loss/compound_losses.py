@@ -6,6 +6,7 @@ from nnunetv2.training.loss.tversky_loss import FocalTverskyLoss
 from nnunetv2.training.loss.frangi_loss import FrangiLoss
 from nnunetv2.utilities.helpers import softmax_helper_dim1
 from torch import nn
+import torch.nn.functional as F
 
 class DeepSupervisionWrapperPassKwargs(nn.Module):
     """
