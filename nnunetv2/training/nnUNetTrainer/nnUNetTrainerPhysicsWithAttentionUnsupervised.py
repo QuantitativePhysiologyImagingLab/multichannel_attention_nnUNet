@@ -7,7 +7,10 @@ import warnings
 from copy import deepcopy
 from datetime import datetime
 from time import time, sleep
+
 from typing import Tuple, Union, List
+from types import SimpleNamespace
+from typing import Any
 
 import pickle
 
@@ -55,7 +58,7 @@ from nnunetv2.training.data_augmentation.compute_initial_patch_size import get_p
 from nnunetv2.training.dataloading.nnunet_dataset import infer_dataset_class
 from nnunetv2.training.dataloading.data_loader import nnUNetDataLoader
 from nnunetv2.training.logging.nnunet_logger import nnUNetLogger
-from nnunetv2.training.loss.compound_losses import DC_and_CE_loss, DC_and_BCE_loss, VeinPhysics_DC_and_CE_loss
+from nnunetv2.training.loss.compound_losses import DC_and_CE_loss, DC_and_BCE_loss, VeinPhysics_DC_and_CE_loss, DeepSupervisionWrapperPassKwargs
 from nnunetv2.training.loss.deep_supervision import DeepSupervisionWrapper
 from nnunetv2.training.loss.dice import get_tp_fp_fn_tn, MemoryEfficientSoftDiceLoss
 from nnunetv2.training.lr_scheduler.polylr import PolyLRScheduler
@@ -69,6 +72,52 @@ from nnunetv2.utilities.label_handling.label_handling import convert_labelmap_to
 from nnunetv2.utilities.plans_handling.plans_handler import PlansManager
 
 from nnunetv2.training.nnUNetTrainer.nnUNetTrainer import nnUNetTrainer
+
+# ---- helper: independent of self ----
+def _safe_get_patch_size(configuration_manager=None, plans_manager=None, model_dir=None):
+    # 1) try direct attr on configuration_manager
+    if configuration_manager is not None:
+        ps = getattr(configuration_manager, "patch_size", None)
+        if ps is not None:
+            return tuple(ps)
+
+        # some builds tuck it into dict-like fields
+        for k in ("architecture_kwargs", "network_arch_kwargs", "config", "configuration"):
+            d = getattr(configuration_manager, k, None)
+            if isinstance(d, dict) and d.get("patch_size") is not None:
+                return tuple(d["patch_size"])
+
+    # 2) try plans_manager
+    if plans_manager is not None:
+        try:
+            conf_name = getattr(plans_manager, "configuration_name", None)
+            plans = getattr(plans_manager, "plans", None)
+            if isinstance(plans, dict):
+                confs = plans.get("configurations") or plans.get("configurations_dict") or {}
+                conf = confs.get(conf_name) or {}
+                if conf.get("patch_size") is not None:
+                    return tuple(conf["patch_size"])
+                if plans.get("patch_size") is not None:
+                    return tuple(plans["patch_size"])
+        except Exception:
+            pass
+
+    # 3) last resort: read nnUNetPlans.json from model dir
+    if model_dir:
+        import os, json
+        pj = os.path.join(model_dir, "nnUNetPlans.json")
+        if os.path.isfile(pj):
+            with open(pj, "r") as f:
+                plans = json.load(f)
+            conf_name = getattr(plans_manager, "configuration_name", None) if plans_manager else None
+            confs = plans.get("configurations") or {}
+            conf = confs.get(conf_name) or {}
+            if conf.get("patch_size") is not None:
+                return tuple(conf["patch_size"])
+            if plans.get("patch_size") is not None:
+                return tuple(plans["patch_size"])
+
+    raise RuntimeError("patch_size not found in configuration_manager/plans/nnUNetPlans.json.")
 
 class AttachB0DirFromProps(BasicTransform):
     """
@@ -89,17 +138,20 @@ class AttachB0DirFromProps(BasicTransform):
         return (b0_voxel / n).astype(np.float32)
 
     def __call__(self, **data_dict):
-        # nnU-Net v2 data_dict has 'keys' listing the case ids for this sample
-        # (1 per sample before collate)
-        case_key = data_dict['keys'][0]
-        if case_key in self._cache:
-            b0 = self._cache[case_key]
-        else:
-            with open(join(self.preprocessed_folder, f"{case_key}.pkl"), 'rb') as f:
+        # If 'keys' isn’t available at this stage, just pass through.
+        klist = data_dict.get('keys', None)
+        if not klist:
+            return data_dict
+
+        case_key = klist[0]
+        b0 = self._cache.get(case_key)
+        if b0 is None:
+            import pickle, os
+            with open(os.path.join(self.preprocessed_folder, f"{case_key}.pkl"), "rb") as f:
                 props = pickle.load(f)
             b0 = self._compute_b0_voxel(props['sitk_stuff']['direction'])
             self._cache[case_key] = b0
-        data_dict['b0_dir'] = b0  # (3,)
+        data_dict['b0_dir'] = b0
         return data_dict
         
 def _rotmat_xyz(rx, ry, rz):
@@ -163,7 +215,7 @@ class EnsureB0Shape(BasicTransform):
             data_dict['b0_dir'] = b0
         return data_dict
 
-class nnUNetTrainerPhysicsLossUnsupervised(nnUNetTrainer):
+class nnUNetTrainerPhysicsWithAttentionUnsupervised(nnUNetTrainer):
     def __init__(self, plans: dict, configuration: str, fold: int, dataset_json: dict,
                  device: torch.device = torch.device('cuda')):
         # From https://grugbrain.dev/. Worth a read ya big brains ;-)
@@ -244,7 +296,7 @@ class nnUNetTrainerPhysicsLossUnsupervised(nnUNetTrainer):
         self.probabilistic_oversampling = False
         self.num_iterations_per_epoch = 250
         self.num_val_iterations_per_epoch = 50
-        self.num_epochs = 1000
+        self.num_epochs = 2000
         self.current_epoch = 0
         self.enable_deep_supervision = True
 
@@ -365,6 +417,11 @@ class nnUNetTrainerPhysicsLossUnsupervised(nnUNetTrainer):
         sitk_dir = props['sitk_stuff']['direction']  # length-9 tuple
         B0 = self._compute_B0_from_direction(sitk_dir)
         self._b0_cache[case_key] = B0
+
+        # print('Key: ', case_key)
+        # print("Direction: ", sitk_dir)
+        # print("B0: ", B0)
+
         return B0
 
     def _do_i_compile(self):
@@ -430,40 +487,68 @@ class nnUNetTrainerPhysicsLossUnsupervised(nnUNetTrainer):
             dct['cudnn_version'] = cudnn_version
             save_json(dct, join(self.output_folder, "debug.json"))
 
+    
     @staticmethod
-    def build_network_architecture(architecture_class_name: str,
-                                   arch_init_kwargs: dict,
-                                   arch_init_kwargs_req_import: Union[List[str], Tuple[str, ...]],
-                                   num_input_channels: int,
-                                   num_output_channels: int,
-                                   enable_deep_supervision: bool = True) -> nn.Module:
-        """
-        This is where you build the architecture according to the plans. There is no obligation to use
-        get_network_from_plans, this is just a utility we use for the nnU-Net default architectures. You can do what
-        you want. Even ignore the plans and just return something static (as long as it can process the requested
-        patch size)
-        but don't bug us with your bugs arising from fiddling with this :-P
-        This is the function that is called in inference as well! This is needed so that all network architecture
-        variants can be loaded at inference time (inference will use the same nnUNetTrainer that was used for
-        training, so if you change the network architecture during training by deriving a new trainer class then
-        inference will know about it).
+    def build_network_architecture(
+        architecture_class_name: str,
+        arch_init_kwargs: dict,
+        arch_init_kwargs_req_import,
+        num_input_channels: int,
+        num_output_channels: int,
+        enable_deep_supervision: bool = True,
+        **_ignored,   # swallow anything unexpected without error
+    ) -> nn.Module:
+        # Your custom net
+        from nnunetv2.training.nnUNetTrainer.nnUNetTrainerWithAttention import (
+            PriorGatedUNetWithAttentionInfer,
+        )
 
-        If you need to know how many segmentation outputs your custom architecture needs to have, use the following snippet:
-        > label_manager = plans_manager.get_label_manager(dataset_json)
-        > label_manager.num_segmentation_heads
-        (why so complicated? -> We can have either classical training (classes) or regions. If we have regions,
-        the number of outputs is != the number of classes. Also there is the ignore label for which no output
-        should be generated. label_manager takes care of all that for you.)
+        # Only use what predict() actually passes. If you want patch_size, try to read it
+        # from arch_init_kwargs, but allow it to be missing.
+        patch_size = None
+        if isinstance(arch_init_kwargs, dict):
+            patch_size = arch_init_kwargs.get('patch_size', None)
 
-        """
-        return get_network_from_plans(
-            architecture_class_name,
-            arch_init_kwargs,
-            arch_init_kwargs_req_import,
-            num_input_channels,
-            num_output_channels,
-            allow_init=True,
-            deep_supervision=enable_deep_supervision)
+        net = PriorGatedUNetWithAttentionInfer(
+            in_channels=num_input_channels,
+            out_channels=num_output_channels,
+            patch_size=patch_size,                 # can be None
+            deep_supervision=True,
+        )
+        # Keep DS flags consistent
+        for attr in ('do_ds', 'deep_supervision', 'enable_deep_supervision'):
+            if hasattr(net, attr):
+                setattr(net, attr, bool(enable_deep_supervision))
+        return net
+
+    @staticmethod
+    def _build_network_architecture_impl(
+        configuration_manager,                 # <--- this is the SimpleNamespace you pass in
+        architecture_class_name: str,
+        arch_init_kwargs: dict,
+        arch_init_kwargs_req_import,
+        num_input_channels: int,
+        num_output_channels: int,
+        enable_deep_supervision: bool = True,
+        plans_manager=None,
+        output_folder=None
+    ):
+        # resolve patch size safely
+        patch_size = _safe_get_patch_size(configuration_manager, plans_manager, output_folder)
+
+        from nnunetv2.training.nnUNetTrainer.nnUNetTrainerWithAttention import (
+            PriorGatedUNetWithAttentionInfer,
+        )
+        net = PriorGatedUNetWithAttentionInfer(
+            in_channels=num_input_channels,
+            out_channels=num_output_channels,
+            patch_size=patch_size,
+            deep_supervision=True,
+        )
+        for attr in ("do_ds", "deep_supervision", "enable_deep_supervision"):
+            if hasattr(net, attr):
+                setattr(net, attr, bool(enable_deep_supervision))
+        return net
 
     def _get_deep_supervision_scales(self):
         if self.enable_deep_supervision:
@@ -519,39 +604,16 @@ class nnUNetTrainerPhysicsLossUnsupervised(nnUNetTrainer):
             self.oversample_foreground_percent = oversample_percent
 
     def _build_loss(self):
-        loss = VeinPhysics_DC_and_CE_loss({},
+        loss = VeinPhysics_DC_and_CE_loss(
                             {'batch_dice': self.configuration_manager.batch_dice,
                             'do_bg': True, 'smooth': 1e-5, 'ddp': self.is_ddp},
-                            {'pi_constant': np.pi},
-                            {
-                                'ce_weight': 0.0,
-                                'dc_weight': 0.0,
-                                'use_topk_ce': False,
-                                'topk_percent': 0.9,
-                                'physics_kwargs': {
-                                    'vein_channel': 1,
-                                    'chi_blood_ppm': 0.30,
-                                    'lambdas': {'phys':10,'mae':5,'tail':0.1,'sign':5},
-                                    'topk_frac': 0.10,
-                                    # defaults stored on the loss (Option B)
-                                    'default_voxel_size': tuple(self.configuration_manager.spacing),
-                                    'expects_b0_from_forward': True,
-                                    'eval_mask_mode': 'predicted_hard',
-                                    'learnable_chi': False,
-                                    'chi_blood_bounds': (0.15, 0.45),
-                                },
-                            },
-                            use_ignore_label=self.label_manager.ignore_label is not None,
+                            {},
+                            {},
+                            weight_ce=0, 
+                            weight_dice=0, 
+                            weight_tversky=0,
+                            ignore_label=self.label_manager.ignore_label,
                             dice_class=MemoryEfficientSoftDiceLoss)
-
-        '''
-        
-        i think that direction is the affine how to use it in my b0
-
-        >> props['sitk_stuff']
-        {'spacing': (0.6000000238418579, 0.6000000238418579, 0.6000000834465027), 'origin': (-87.04582214355469, 36.72642517089844, -87.85877990722656), 'direction': (0.9961066557718066, 0.08815628156742629, 0.0, 0.08572051848748766, -0.9685841503804856, 0.23344532351690625, -0.02057967534592967, 0.23253647811024747, 0.9723699300822126)}
-
-        '''
 
         if self._do_i_compile():
             loss.dc = torch.compile(loss.dc)
@@ -563,17 +625,11 @@ class nnUNetTrainerPhysicsLossUnsupervised(nnUNetTrainer):
             deep_supervision_scales = self._get_deep_supervision_scales()
             weights = np.array([1 / (2 ** i) for i in range(len(deep_supervision_scales))])
             if self.is_ddp and not self._do_i_compile():
-                # very strange and stupid interaction. DDP crashes and complains about unused parameters due to
-                # weights[-1] = 0. Interestingly this crash doesn't happen with torch.compile enabled. Strange stuff.
-                # Anywho, the simple fix is to set a very low weight to this.
                 weights[-1] = 1e-6
             else:
                 weights[-1] = 0
-
-            # we don't use the lowest 2 outputs. Normalize weights so that they sum to 1
             weights = weights / weights.sum()
-            # now wrap the loss
-            loss = DeepSupervisionWrapper(loss, weights)
+            loss = DeepSupervisionWrapperPassKwargs(loss, weights)
 
         return loss
 
@@ -848,7 +904,7 @@ class nnUNetTrainerPhysicsLossUnsupervised(nnUNetTrainer):
     @staticmethod
     def get_training_transforms(
             patch_size: Union[np.ndarray, Tuple[int]],
-            rotation_for_DA: RandomScalar,
+            rotation_for_DA,
             deep_supervision_scales: Union[List, Tuple, None],
             mirror_axes: Tuple[int, ...],
             do_dummy_2d_data_aug: bool,
@@ -859,6 +915,15 @@ class nnUNetTrainerPhysicsLossUnsupervised(nnUNetTrainer):
             ignore_label: int = None,
             preprocessed_dataset_folder: str = ""
     ) -> BasicTransform:
+        """
+        Same as your original, but with ALL intensity-changing augs removed:
+        - GaussianNoiseTransform
+        - GaussianBlurTransform
+        - MultiplicativeBrightnessTransform
+        - ContrastTransform
+        - SimulateLowResolutionTransform
+        - GammaTransform (both variants)
+        """
         transforms = []
         if do_dummy_2d_data_aug:
             ignore_axes = (0,)
@@ -869,13 +934,17 @@ class nnUNetTrainerPhysicsLossUnsupervised(nnUNetTrainer):
             ignore_axes = None
 
             transforms.append(AttachB0DirFromProps(preprocessed_dataset_folder))
-
-
             transforms.append(
                 SpatialTransformWithB0(
-                    patch_size_spatial, patch_center_dist_from_border=0, random_crop=False, p_elastic_deform=0,
+                    patch_size_spatial,
+                    patch_center_dist_from_border=0,
+                    random_crop=False,
+                    p_elastic_deform=0,
                     p_rotation=0.2,
-                    rotation=rotation_for_DA, p_scaling=0.2, scaling=(0.7, 1.4), p_synchronize_scaling_across_axes=1,
+                    rotation=rotation_for_DA,
+                    p_scaling=0.2,
+                    scaling=(0.7, 1.4),
+                    p_synchronize_scaling_across_axes=1,
                     bg_style_seg_sampling=False
                 )
             )
@@ -883,83 +952,22 @@ class nnUNetTrainerPhysicsLossUnsupervised(nnUNetTrainer):
         if do_dummy_2d_data_aug:
             transforms.append(Convert2DTo3DTransform())
 
-        transforms.append(RandomTransform(
-            GaussianNoiseTransform(
-                noise_variance=(0, 0.1),
-                p_per_channel=1,
-                synchronize_channels=True
-            ), apply_probability=0.1
-        ))
-        transforms.append(RandomTransform(
-            GaussianBlurTransform(
-                blur_sigma=(0.5, 1.),
-                synchronize_channels=False,
-                synchronize_axes=False,
-                p_per_channel=0.5, benchmark=True
-            ), apply_probability=0.2
-        ))
-        transforms.append(RandomTransform(
-            MultiplicativeBrightnessTransform(
-                multiplier_range=BGContrast((0.75, 1.25)),
-                synchronize_channels=False,
-                p_per_channel=1
-            ), apply_probability=0.15
-        ))
-        transforms.append(RandomTransform(
-            ContrastTransform(
-                contrast_range=BGContrast((0.75, 1.25)),
-                preserve_range=True,
-                synchronize_channels=False,
-                p_per_channel=1
-            ), apply_probability=0.15
-        ))
-        transforms.append(RandomTransform(
-            SimulateLowResolutionTransform(
-                scale=(0.5, 1),
-                synchronize_channels=False,
-                synchronize_axes=True,
-                ignore_axes=ignore_axes,
-                allowed_channels=None,
-                p_per_channel=0.5
-            ), apply_probability=0.25
-        ))
-        transforms.append(RandomTransform(
-            GammaTransform(
-                gamma=BGContrast((0.7, 1.5)),
-                p_invert_image=1,
-                synchronize_channels=False,
-                p_per_channel=1,
-                p_retain_stats=1
-            ), apply_probability=0.1
-        ))
-        transforms.append(RandomTransform(
-            GammaTransform(
-                gamma=BGContrast((0.7, 1.5)),
-                p_invert_image=0,
-                synchronize_channels=False,
-                p_per_channel=1,
-                p_retain_stats=1
-            ), apply_probability=0.3
-        ))
+        # ---- NO intensity transforms added here ----
+
         if mirror_axes is not None and len(mirror_axes) > 0:
-            transforms.append(
-                MirrorTransform(
-                    allowed_axes=mirror_axes
-                )
-            )
+            transforms.append(MirrorTransform(allowed_axes=mirror_axes))
 
         if use_mask_for_norm is not None and any(use_mask_for_norm):
             transforms.append(MaskImageTransform(
-                apply_to_channels=[i for i in range(len(use_mask_for_norm)) if use_mask_for_norm[i]],
+                apply_to_channels=[i for i, u in enumerate(use_mask_for_norm) if u],
                 channel_idx_in_seg=0,
                 set_outside_to=0,
             ))
 
-        transforms.append(
-            RemoveLabelTansform(-1, 0)
-        )
+        transforms.append(RemoveLabelTansform(-1, 0))
+
         if is_cascaded:
-            assert foreground_labels is not None, 'We need foreground_labels for cascade augmentations'
+            assert foreground_labels is not None, 'foreground_labels required for cascade augmentations'
             transforms.append(
                 MoveSegAsOneHotToDataTransform(
                     source_channel_idx=1,
@@ -967,28 +975,23 @@ class nnUNetTrainerPhysicsLossUnsupervised(nnUNetTrainer):
                     remove_channel_from_source=True
                 )
             )
-            transforms.append(
-                RandomTransform(
-                    ApplyRandomBinaryOperatorTransform(
-                        channel_idx=list(range(-len(foreground_labels), 0)),
-                        strel_size=(1, 8),
-                        p_per_label=1
-                    ), apply_probability=0.4
-                )
-            )
-            transforms.append(
-                RandomTransform(
-                    RemoveRandomConnectedComponentFromOneHotEncodingTransform(
-                        channel_idx=list(range(-len(foreground_labels), 0)),
-                        fill_with_other_class_p=0,
-                        dont_do_if_covers_more_than_x_percent=0.15,
-                        p_per_label=1
-                    ), apply_probability=0.2
-                )
-            )
+            transforms.append(RandomTransform(
+                ApplyRandomBinaryOperatorTransform(
+                    channel_idx=list(range(-len(foreground_labels), 0)),
+                    strel_size=(1, 8),
+                    p_per_label=1
+                ), apply_probability=0.4
+            ))
+            transforms.append(RandomTransform(
+                RemoveRandomConnectedComponentFromOneHotEncodingTransform(
+                    channel_idx=list(range(-len(foreground_labels), 0)),
+                    fill_with_other_class_p=0,
+                    dont_do_if_covers_more_than_x_percent=0.15,
+                    p_per_label=1
+                ), apply_probability=0.2
+            ))
 
         if regions is not None:
-            # the ignore label must also be converted
             transforms.append(
                 ConvertSegmentationToRegionsTransform(
                     regions=list(regions) + [ignore_label] if ignore_label is not None else regions,
@@ -1008,11 +1011,11 @@ class nnUNetTrainerPhysicsLossUnsupervised(nnUNetTrainer):
             foreground_labels: Union[Tuple[int, ...], List[int]] = None,
             regions: List[Union[List[int], Tuple[int, ...], int]] = None,
             ignore_label: int = None,
+            preprocessed_dataset_folder: str = ""
     ) -> BasicTransform:
         transforms = []
-        transforms.append(
-            RemoveLabelTansform(-1, 0)
-        )
+        transforms.append(AttachB0DirFromProps(preprocessed_dataset_folder))
+        transforms.append(RemoveLabelTansform(-1, 0))
 
         if is_cascaded:
             transforms.append(
@@ -1024,7 +1027,6 @@ class nnUNetTrainerPhysicsLossUnsupervised(nnUNetTrainer):
             )
 
         if regions is not None:
-            # the ignore label must also be converted
             transforms.append(
                 ConvertSegmentationToRegionsTransform(
                     regions=list(regions) + [ignore_label] if ignore_label is not None else regions,
@@ -1034,6 +1036,7 @@ class nnUNetTrainerPhysicsLossUnsupervised(nnUNetTrainer):
 
         if deep_supervision_scales is not None:
             transforms.append(DownsampleSegForDSTransform(ds_scales=deep_supervision_scales))
+
         return ComposeTransforms(transforms)
 
     def set_deep_supervision_enabled(self, enabled: bool):
@@ -1135,6 +1138,7 @@ class nnUNetTrainerPhysicsLossUnsupervised(nnUNetTrainer):
         phase = data[:, 1:2, ...]
         keys  = batch['keys']       # list of case identifiers length B
 
+
         # build (B,3) tensor of B0 directions in voxel coords
         b0_dirs = torch.stack([self._get_case_B0(k) for k in keys], dim=0).to(self.device)
 
@@ -1152,7 +1156,7 @@ class nnUNetTrainerPhysicsLossUnsupervised(nnUNetTrainer):
         with autocast(self.device.type, enabled=True) if self.device.type == 'cuda' else dummy_context():
             output = self.network(data)
             # del data
-            l = self.loss(output, target, phase, b0_dir=b0_dirs)
+            l = self.loss(output, target, data, b0_dir=b0_dirs)
 
 
         if self.grad_scaler is not None:
@@ -1202,8 +1206,8 @@ class nnUNetTrainerPhysicsLossUnsupervised(nnUNetTrainer):
         # So autocast will only be active if we have a cuda device.
         with autocast(self.device.type, enabled=True) if self.device.type == 'cuda' else dummy_context():
             output = self.network(data)
+            l = self.loss(output, target, data, b0_dir=b0_dirs)
             del data
-            l = self.loss(output, target, phase, b0_dir=b0_dirs)
 
         # we only need the output with the highest output resolution (if DS enabled)
         if self.enable_deep_supervision:
