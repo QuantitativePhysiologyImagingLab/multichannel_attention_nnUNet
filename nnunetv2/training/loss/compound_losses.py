@@ -101,7 +101,7 @@ class VeinPhysics_Frangi_DC_and_CE_loss(nn.Module):
             target_dice = target[:, :1] if target.shape[1] >= 1 else target  # keep class channel for CE/Dice
 
         # ---- CE & Dice ----
-        dc_loss = self.dc(net_output, target_dice, loss_mask=mask) if (self.weight_dice != 0 and self.dc is not None) else 0.0
+        dc_loss = self.dc(net_output, target_dice, loss_mask=mask)
         tversky_loss = self.tversky(net_output, target_dice)
         ce_loss = self.ce(net_output, target_dice[:, 0]) if (self.weight_ce != 0 and self.ce is not None and (self.ignore_label is None or num_fg > 0)) else 0.0
 
@@ -133,7 +133,8 @@ class VeinPhysics_Frangi_DC_and_CE_loss(nn.Module):
             frangi_loss = self.frangi(
                 net_output        = net_output,
                 data               = data
-            )
+            ) if (self.weight_frangi != 0) else 0.0
+            
             total = total + self.weight_frangi*frangi_loss
 
         print("CE loss: ", ce_loss)
