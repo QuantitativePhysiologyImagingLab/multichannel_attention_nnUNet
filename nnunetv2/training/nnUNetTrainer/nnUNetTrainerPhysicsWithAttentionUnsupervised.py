@@ -58,7 +58,7 @@ from nnunetv2.training.data_augmentation.compute_initial_patch_size import get_p
 from nnunetv2.training.dataloading.nnunet_dataset import infer_dataset_class
 from nnunetv2.training.dataloading.data_loader import nnUNetDataLoader
 from nnunetv2.training.logging.nnunet_logger import nnUNetLogger
-from nnunetv2.training.loss.compound_losses import DC_and_CE_loss, DC_and_BCE_loss, VeinPhysics_DC_and_CE_loss, DeepSupervisionWrapperPassKwargs
+from nnunetv2.training.loss.compound_losses import VeinPhysics_DC_and_CE_loss, DeepSupervisionWrapperPassKwargs, VeinPhysics_Frangi_DC_and_CE_loss
 from nnunetv2.training.loss.deep_supervision import DeepSupervisionWrapper
 from nnunetv2.training.loss.dice import get_tp_fp_fn_tn, MemoryEfficientSoftDiceLoss
 from nnunetv2.training.lr_scheduler.polylr import PolyLRScheduler
@@ -215,7 +215,7 @@ class EnsureB0Shape(BasicTransform):
             data_dict['b0_dir'] = b0
         return data_dict
 
-class nnUNetTrainerPhysicsWithAttentionUnsupervised(nnUNetTrainer):
+class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
     def __init__(self, plans: dict, configuration: str, fold: int, dataset_json: dict,
                  device: torch.device = torch.device('cuda')):
         # From https://grugbrain.dev/. Worth a read ya big brains ;-)
@@ -296,7 +296,7 @@ class nnUNetTrainerPhysicsWithAttentionUnsupervised(nnUNetTrainer):
         self.probabilistic_oversampling = False
         self.num_iterations_per_epoch = 250
         self.num_val_iterations_per_epoch = 50
-        self.num_epochs = 2000
+        self.num_epochs = 1000
         self.current_epoch = 0
         self.enable_deep_supervision = True
 
@@ -604,14 +604,16 @@ class nnUNetTrainerPhysicsWithAttentionUnsupervised(nnUNetTrainer):
             self.oversample_foreground_percent = oversample_percent
 
     def _build_loss(self):
-        loss = VeinPhysics_DC_and_CE_loss(
+        loss = VeinPhysics_Frangi_DC_and_CE_loss(
                             {'batch_dice': self.configuration_manager.batch_dice,
                             'do_bg': True, 'smooth': 1e-5, 'ddp': self.is_ddp},
                             {},
                             {},
                             weight_ce=0, 
                             weight_dice=0, 
-                            weight_tversky=0,
+                            weight_tversky=0, 
+                            weight_physics=20, 
+                            weight_frangi=0,
                             ignore_label=self.label_manager.ignore_label,
                             dice_class=MemoryEfficientSoftDiceLoss)
 
