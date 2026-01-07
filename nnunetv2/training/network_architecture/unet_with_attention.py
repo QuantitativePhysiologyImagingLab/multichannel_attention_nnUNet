@@ -1,24 +1,52 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
-class ConvBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size, stride, padding, transposed=False, output_padding=0):
-        super().__init__()
-        if transposed:
-            conv = nn.ConvTranspose3d(in_channels, out_channels, kernel_size, stride, padding, output_padding=output_padding)
-        else:
-            conv = nn.Conv3d(in_channels, out_channels, kernel_size, stride, padding)
+def _center_crop_or_pad_3d(t: torch.Tensor, target_spatial):
+    """
+    t: (B,C,D,H,W)
+    target_spatial: (Dt,Ht,Wt)
+    Returns t center-cropped and/or zero-padded to target_spatial.
+    """
+    D, H, W = t.shape[-3:]
+    Dt, Ht, Wt = target_spatial
 
-        self.block = nn.Sequential(
-            conv,
-            nn.InstanceNorm3d(out_channels),
-            nn.ELU(inplace=True)
-        )
+    # ---- center crop if too big ----
+    sd = max((D - Dt) // 2, 0)
+    sh = max((H - Ht) // 2, 0)
+    sw = max((W - Wt) // 2, 0)
 
-    def forward(self, x):
-        out = self.block(x)
-        # print(f"{'Up' if isinstance(self.block[0], nn.ConvTranspose3d) else 'Down'} block output: {out.shape}")
-        return out
+    ed = sd + min(Dt, D)
+    eh = sh + min(Ht, H)
+    ew = sw + min(Wt, W)
+
+    t = t[..., sd:ed, sh:eh, sw:ew]
+
+    # ---- pad if too small ----
+    D2, H2, W2 = t.shape[-3:]
+    pd = max(Dt - D2, 0)
+    ph = max(Ht - H2, 0)
+    pw = max(Wt - W2, 0)
+
+    # F.pad uses (W_left,W_right,H_left,H_right,D_left,D_right)
+    pad = (pw // 2, pw - pw // 2,
+           ph // 2, ph - ph // 2,
+           pd // 2, pd - pd // 2)
+    if any(p > 0 for p in pad):
+        t = F.pad(t, pad, mode="constant", value=0.0)
+
+    return t
+
+def _match_spatial(a: torch.Tensor, b: torch.Tensor):
+    """
+    Make a and b have identical spatial shape by cropping/padding both to the min spatial size.
+    """
+    Da, Ha, Wa = a.shape[-3:]
+    Db, Hb, Wb = b.shape[-3:]
+    target = (min(Da, Db), min(Ha, Hb), min(Wa, Wb))
+    a2 = _center_crop_or_pad_3d(a, target)
+    b2 = _center_crop_or_pad_3d(b, target)
+    return a2, b2
 
 
 class AttentionGate(nn.Module):
@@ -42,11 +70,17 @@ class AttentionGate(nn.Module):
     def forward(self, g, x):
         g1 = self.W_g(g)
         x1 = self.W_x(x)
-        # print(f"  AttentionGate: g1 {g1.shape}, x1 {x1.shape}")
-        psi = self.psi(g1 + x1)
-        gated = x * psi
-        # print(f"  AttentionGate output: {gated.shape}")
-        return gated
+
+        # ---- FIX: align spatial shapes BEFORE addition ----
+        g1, x1 = _match_spatial(g1, x1)
+
+        psi = self.psi(g1 + x1)  # (B,1,*,*,*)
+
+        # ---- FIX: ensure psi matches x spatial size ----
+        if psi.shape[-3:] != x.shape[-3:]:
+            psi = _center_crop_or_pad_3d(psi, x.shape[-3:])
+
+        return x * psi
 
 
 class AttentionDecoder(nn.Module):
@@ -74,14 +108,21 @@ class AttentionDecoder(nn.Module):
 
     def forward(self, b, x4, x3, x2, x1):
         u4 = self.up4(b)
+        # align u4 to skip spatial size (x3) before attention + concat
+        if u4.shape[-3:] != x3.shape[-3:]:
+            u4 = _center_crop_or_pad_3d(u4, x3.shape[-3:])
         a4 = self.att4(u4, x3)
         u4 = torch.cat([u4, a4], dim=1)
 
         u3 = self.up3(u4)
+        if u3.shape[-3:] != x2.shape[-3:]:
+            u3 = _center_crop_or_pad_3d(u3, x2.shape[-3:])
         a3 = self.att3(u3, x2)
         u3 = torch.cat([u3, a3], dim=1)
 
         u2 = self.up2(u3)
+        if u2.shape[-3:] != x1.shape[-3:]:
+            u2 = _center_crop_or_pad_3d(u2, x1.shape[-3:])
         a2 = self.att2(u2, x1)
         u2 = torch.cat([u2, a2], dim=1)
 
