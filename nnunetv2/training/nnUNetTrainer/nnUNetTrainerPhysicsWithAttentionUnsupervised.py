@@ -215,7 +215,7 @@ class EnsureB0Shape(BasicTransform):
             data_dict['b0_dir'] = b0
         return data_dict
 
-class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
+class nnUNetTrainerPhysicsWithAttentionUnsupervised(nnUNetTrainer):
     def __init__(self, plans: dict, configuration: str, fold: int, dataset_json: dict,
                  device: torch.device = torch.device('cuda')):
         # From https://grugbrain.dev/. Worth a read ya big brains ;-)
