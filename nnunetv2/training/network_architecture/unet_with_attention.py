@@ -2,6 +2,25 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+class ConvBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, stride, padding, transposed=False, output_padding=0):
+        super().__init__()
+        if transposed:
+            conv = nn.ConvTranspose3d(in_channels, out_channels, kernel_size, stride, padding, output_padding=output_padding)
+        else:
+            conv = nn.Conv3d(in_channels, out_channels, kernel_size, stride, padding)
+
+        self.block = nn.Sequential(
+            conv,
+            nn.InstanceNorm3d(out_channels),
+            nn.ELU(inplace=True)
+        )
+
+    def forward(self, x):
+        out = self.block(x)
+        # print(f"{'Up' if isinstance(self.block[0], nn.ConvTranspose3d) else 'Down'} block output: {out.shape}")
+        return out
+
 def _center_crop_or_pad_3d(t: torch.Tensor, target_spatial):
     """
     t: (B,C,D,H,W)
