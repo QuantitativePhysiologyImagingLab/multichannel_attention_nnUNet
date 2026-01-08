@@ -613,7 +613,7 @@ class nnUNetTrainerPhysicsWithAttentionUnsupervised(nnUNetTrainer):
                             weight_dice=0, 
                             weight_tversky=0, 
                             weight_physics=20, 
-                            weight_frangi=0,
+                            weight_frangi=1,
                             ignore_label=self.label_manager.ignore_label,
                             dice_class=MemoryEfficientSoftDiceLoss)
 
