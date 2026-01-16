@@ -85,11 +85,13 @@ class nnUNetPredictor(object):
         if isinstance(use_folds, str):
             use_folds = [use_folds]
 
+        print("Path to checkpoint used for inference:")
         parameters = []
         for i, f in enumerate(use_folds):
             f = int(f) if f != 'all' else f
             checkpoint = torch.load(join(model_training_output_dir, f'fold_{f}', checkpoint_name),
                                     map_location=torch.device('cpu'), weights_only=False)
+            print(join(model_training_output_dir, f'fold_{f}', checkpoint_name))
             if i == 0:
                 trainer_name = checkpoint['trainer_name']
                 configuration_name = checkpoint['init_args']['configuration']
