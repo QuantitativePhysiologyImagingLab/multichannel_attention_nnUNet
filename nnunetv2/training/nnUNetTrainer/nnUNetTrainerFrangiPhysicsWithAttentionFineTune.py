@@ -334,7 +334,7 @@ class nnUNetTrainerFrangiPhysicsWithAttentionFineTune(nnUNetTrainer):
         # self.configure_rotation_dummyDA_mirroring_and_inital_patch_size and will be saved in checkpoints
 
         ### checkpoint saving stuff
-        self.save_every = 50
+        self.save_every = 5
         self.disable_checkpointing = False
 
         self.was_initialized = False
