@@ -213,7 +213,7 @@ def _frangi_3d_single(
     # optionally clamp extreme values (defensive)
     H32 = H32.clamp(min=-1e8, max=1e4)
 
-    evals32, evecs32 = eigh_3x3_symmetric(H)
+    evals32, evecs32 = eigh_3x3_symmetric(H32)
 
     evals = evals32.to(orig_dtype)
     evecs = evecs32.to(orig_dtype)
