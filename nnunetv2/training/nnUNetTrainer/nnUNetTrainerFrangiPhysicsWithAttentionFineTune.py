@@ -1314,6 +1314,8 @@ class nnUNetTrainerFrangiPhysicsWithAttentionFineTune(nnUNetTrainer):
         if self.local_rank == 0:
             self.logger.plot_progress_png(self.output_folder)
 
+        self.print_to_log_file("DEBUG >>> inside FineTune.on_epoch_end <<<", also_print_to_console=True)
+        
         self.current_epoch += 1
 
     def save_checkpoint(self, filename: str) -> None:
