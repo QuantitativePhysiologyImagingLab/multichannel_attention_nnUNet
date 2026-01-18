@@ -1536,6 +1536,7 @@ class nnUNetTrainerFrangiPhysicsWithAttentionFineTune(nnUNetTrainer):
     
             for epoch in range(self.current_epoch, self.num_epochs):
                 # --- DEBUG: snapshot weights before epoch ---
+                self.print_to_log_file(f"DEBUG weight change after epoch {self.current_epoch}:")
                 self.print_to_log_file("Train Start")
                 if True:  # only once at first epoch
                     with torch.no_grad():
