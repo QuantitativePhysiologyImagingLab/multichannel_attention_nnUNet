@@ -28,28 +28,25 @@ class nnUNetLogger(object):
         self.verbose = verbose
         # shut up, this logging is great
 
-    def log(self, key, value, epoch: int):
-        """
-        sometimes shit gets messed up. We try to catch that here
-        """
-        assert key in self.my_fantastic_logging.keys() and isinstance(self.my_fantastic_logging[key], list), \
-            'This function is only intended to log stuff to lists and to have one entry per epoch'
-
-        if self.verbose: print(f'logging {key}: {value} for epoch {epoch}')
-
-        if len(self.my_fantastic_logging[key]) < (epoch + 1):
-            self.my_fantastic_logging[key].append(value)
-        else:
-            assert len(self.my_fantastic_logging[key]) == (epoch + 1), 'something went horribly wrong. My logging ' \
-                                                                       'lists length is off by more than 1'
-            print(f'maybe some logging issue!? logging {key} and {value}')
-            self.my_fantastic_logging[key][epoch] = value
-
-        # handle the ema_fg_dice special case! It is automatically logged when we add a new mean_fg_dice
+    def log(self, key, value, epoch):
+        # ensure key exists
+        if key not in self.my_fantastic_logging:
+            self.my_fantastic_logging[key] = []
+    
         if key == 'mean_fg_dice':
-            new_ema_pseudo_dice = self.my_fantastic_logging['ema_fg_dice'][epoch - 1] * 0.9 + 0.1 * value \
-                if len(self.my_fantastic_logging['ema_fg_dice']) > 0 else value
-            self.log('ema_fg_dice', new_ema_pseudo_dice, epoch)
+            ema_list = self.my_fantastic_logging['ema_fg_dice']
+    
+            if epoch == 0 or len(ema_list) == 0:
+                # first epoch: EMA = current value
+                new_ema_pseudo_dice = value
+            else:
+                # use the last EMA value (or epoch-1 if you prefer)
+                prev = ema_list[-1] if (epoch - 1) >= len(ema_list) else ema_list[-1]
+                new_ema_pseudo_dice = prev * 0.9 + 0.1 * value
+    
+            ema_list.append(new_ema_pseudo_dice)
+    
+        self.my_fantastic_logging[key].append(value)
 
     def plot_progress_png(self, output_folder):
         # we infer the epoch form our internal logging
