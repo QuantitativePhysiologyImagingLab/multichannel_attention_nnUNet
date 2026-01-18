@@ -128,15 +128,14 @@ class VeinPhysics_Frangi_DC_and_CE_loss(nn.Module):
             total = total + self.weight_physics*phys_loss
 
         # ---- Frangi term ----
-        if self.frangi is not None:
-
+        if self.frangi is not None and self.weight_frangi != 0:
+        with torch.no_grad():  # TEMPORARY
             frangi_loss = self.frangi(
-                net_output        = net_output,
-                data               = data
-            ) if (self.weight_frangi != 0) else 0.0
-            
-            total = total + self.weight_frangi*frangi_loss
-
+                net_output=net_output.detach(),
+                data=data
+            )
+        total = total + self.weight_frangi * frangi_loss
+                    
         # print("CE loss: ", ce_loss)
         print("DC loss: ", dc_loss)
         # print("Phys loss: ", phys_loss)
