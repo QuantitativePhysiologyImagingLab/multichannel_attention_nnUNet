@@ -130,7 +130,7 @@ class VeinPhysics_Frangi_DC_and_CE_loss(nn.Module):
         # ---- Frangi term ----
         if self.frangi is not None and self.weight_frangi != 0:
             frangi_loss = self.frangi(
-                net_output=net_output.detach(),
+                net_output=net_output,
                 data=data
             )
             total = total + self.weight_frangi * frangi_loss
