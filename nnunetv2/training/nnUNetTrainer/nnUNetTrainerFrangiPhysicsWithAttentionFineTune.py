@@ -1132,40 +1132,51 @@ class nnUNetTrainerFrangiPhysicsWithAttentionFineTune(nnUNetTrainer):
     def train_step(self, batch: dict) -> dict:
         data = batch['data']
         target = batch['target']
-        phase = data[:, 1:2, ...]
-        keys  = batch['keys']       # list of case identifiers length B
-
-
-        # build (B,3) tensor of B0 directions in voxel coords
+        keys  = batch['keys']
+    
         b0_dirs = torch.stack([self._get_case_B0(k) for k in keys], dim=0).to(self.device)
-
+    
         data = data.to(self.device, non_blocking=True)
         if isinstance(target, list):
             target = [i.to(self.device, non_blocking=True) for i in target]
         else:
             target = target.to(self.device, non_blocking=True)
-
+    
         self.optimizer.zero_grad(set_to_none=True)
-        # Autocast can be annoying
-        # If the device_type is 'cpu' then it's slow as heck and needs to be disabled.
-        # If the device_type is 'mps' then it will complain that mps is not implemented, even if enabled=False is set. Whyyyyyyy. (this is why we don't make use of enabled=False)
-        # So autocast will only be active if we have a cuda device.
+    
         with autocast(self.device.type, enabled=True) if self.device.type == 'cuda' else dummy_context():
             output = self.network(data)
-            # del data
             l = self.loss(output, target, data, b0_dir=b0_dirs)
-
-
+    
         if self.grad_scaler is not None:
             self.grad_scaler.scale(l).backward()
+    
+            # 🔍 DEBUG: check max grad magnitude
+            max_grad = 0.0
+            for name, p in self.network.named_parameters():
+                if p.grad is not None:
+                    g = p.grad.detach().abs().max().item()
+                    max_grad = max(max_grad, g)
+            self.print_to_log_file(f"DEBUG[train_step] max grad abs = {max_grad}")
+    
             self.grad_scaler.unscale_(self.optimizer)
             torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)
             self.grad_scaler.step(self.optimizer)
             self.grad_scaler.update()
         else:
             l.backward()
+    
+            # 🔍 DEBUG: check max grad magnitude
+            max_grad = 0.0
+            for name, p in self.network.named_parameters():
+                if p.grad is not None:
+                    g = p.grad.detach().abs().max().item()
+                    max_grad = max(max_grad, g)
+            self.print_to_log_file(f"DEBUG[train_step] max grad abs = {max_grad}")
+    
             torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)
             self.optimizer.step()
+    
         return {'loss': l.detach().cpu().numpy()}
 
     def on_train_epoch_end(self, train_outputs: List[dict]):
