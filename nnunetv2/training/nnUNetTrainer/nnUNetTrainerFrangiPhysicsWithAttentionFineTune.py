@@ -1561,7 +1561,7 @@ class nnUNetTrainerFrangiPhysicsWithAttentionFineTune(nnUNetTrainer):
                 self.on_epoch_end()
     
                 # --- DEBUG: compare weights after this epoch ---
-                if epoch == self.current_epoch - 1:  # just completed the first epoch of this run
+                if epoch == self.current_epoch:  # just completed the first epoch of this run
                     with torch.no_grad():
                         w_after = self.network.state_dict()
                         max_diff = 0.0
