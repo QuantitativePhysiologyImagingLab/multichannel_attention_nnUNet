@@ -1536,7 +1536,8 @@ class nnUNetTrainerFrangiPhysicsWithAttentionFineTune(nnUNetTrainer):
     
             for epoch in range(self.current_epoch, self.num_epochs):
                 # --- DEBUG: snapshot weights before epoch ---
-                if epoch == self.current_epoch:  # only once at first epoch
+                self.print_to_log_file("Train Start")
+                if True:  # only once at first epoch
                     with torch.no_grad():
                         self._debug_w_before = {
                             k: v.detach().cpu().clone()
@@ -1561,7 +1562,7 @@ class nnUNetTrainerFrangiPhysicsWithAttentionFineTune(nnUNetTrainer):
                 self.on_epoch_end()
     
                 # --- DEBUG: compare weights after this epoch ---
-                if epoch == self.current_epoch:  # just completed the first epoch of this run
+                if True:  # just completed the first epoch of this run
                     with torch.no_grad():
                         w_after = self.network.state_dict()
                         max_diff = 0.0
