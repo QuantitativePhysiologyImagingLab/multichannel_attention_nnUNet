@@ -1529,25 +1529,42 @@ class nnUNetTrainerFrangiPhysicsWithAttentionFineTune(nnUNetTrainer):
         self.set_deep_supervision_enabled(True)
         compute_gaussian.cache_clear()
 
-    def run_training(self):
-        self.on_train_start()
-
-        for epoch in range(self.current_epoch, self.num_epochs):
-            self.on_epoch_start()
-
-            self.on_train_epoch_start()
-            train_outputs = []
-            for batch_id in range(self.num_iterations_per_epoch):
-                train_outputs.append(self.train_step(next(self.dataloader_train)))
-            self.on_train_epoch_end(train_outputs)
-
-            with torch.no_grad():
-                self.on_validation_epoch_start()
-                val_outputs = []
-                for batch_id in range(self.num_val_iterations_per_epoch):
-                    val_outputs.append(self.validation_step(next(self.dataloader_val)))
-                self.on_validation_epoch_end(val_outputs)
-
-            self.on_epoch_end()
-
-        self.on_train_end()
+        def run_training(self):
+            self.on_train_start()
+    
+            for epoch in range(self.current_epoch, self.num_epochs):
+                # --- DEBUG: snapshot weights before epoch ---
+                if epoch == self.current_epoch:  # only once at first epoch
+                    with torch.no_grad():
+                        self._debug_w_before = {
+                            k: v.detach().cpu().clone()
+                            for k, v in self.network.state_dict().items()
+                        }
+    
+                self.on_epoch_start()
+    
+                self.on_train_epoch_start()
+                train_outputs = []
+                for batch_id in range(self.num_iterations_per_epoch):
+                    train_outputs.append(self.train_step(next(self.dataloader_train)))
+                self.on_train_epoch_end(train_outputs)
+    
+                with torch.no_grad():
+                    self.on_validation_epoch_start()
+                    val_outputs = []
+                    for batch_id in range(self.num_val_iterations_per_epoch):
+                        val_outputs.append(self.validation_step(next(self.dataloader_val)))
+                    self.on_validation_epoch_end(val_outputs)
+    
+                self.on_epoch_end()
+    
+                # --- DEBUG: compare weights after this epoch ---
+                if epoch == self.current_epoch - 1:  # just completed the first epoch of this run
+                    with torch.no_grad():
+                        w_after = self.network.state_dict()
+                        max_diff = 0.0
+                        for k, v0 in self._debug_w_before.items():
+                            v1 = w_after[k].detach().cpu()
+                            d = (v1 - v0).abs().max().item()
+                            max_diff = max(max_diff, d)
+                        self.print_to_log_file(f"DEBUG weight change after epoch {epoch}: max_diff={max_diff}")
