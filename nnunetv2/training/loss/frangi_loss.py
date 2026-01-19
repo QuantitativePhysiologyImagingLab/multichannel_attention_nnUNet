@@ -333,49 +333,43 @@ class FrangiLoss(nn.Module):
     def forward(self, net_output, data):
         """
         net_output: (B,C,X,Y,Z)
-        target:     (B,3,X,Y,Z)  [0]=chi_qsm_ppm, [1]=localfield_ppm, [2]=Frangi_vesselness
+        data:       (B,3,X,Y,Z)  [0]=chi_qsm, [1]=localfield, [2]=Frangi(QSM) or 0
         """
-        
-        # # --- debug: run a few times only ---
-        # if not hasattr(self, "_dbg_count"):
-        #     self._dbg_count = 0
-            
-        # Cast priors to the net’s dtype/device
-        chi_qsm = data[:, 0:1].to(device=net_output.device, dtype=net_output.dtype)   # ppm
-        V_I  = data[:, 2:3].to(device=net_output.device, dtype=net_output.dtype)   # frangi QSM
+        device = net_output.device
 
-        brain_mask = (chi_qsm != 0).to(net_output.dtype)
-        
-        chi_qsm    = self._resize_like(chi_qsm, net_output, is_mask=False)
-        V_I     = self._resize_like(V_I, net_output, is_mask=False)
-        brain_mask = self._resize_like(brain_mask, net_output, is_mask=True)
+        # ---- cast everything to fp32 inside, return in original dtype ----
+        net_output32 = net_output.float()
+        chi_qsm = data[:, 0:1].to(device=device, dtype=torch.float32)
+        V_I     = data[:, 2:3].to(device=device, dtype=torch.float32)
 
-        probs = torch.softmax(net_output, dim=1)  # (B,C,X,Y,Z)
-        vein_p = probs[:, self.vein_channel:self.vein_channel+1]  # (B,1,X,Y,Z)
-        vein_eval = (vein_p >= 0.5).to(net_output.dtype)
-        # valid = (vein_eval > 0) & (brain_mask > 0)
+        brain_mask = (chi_qsm != 0).to(torch.float32)
 
+        chi_qsm   = self._resize_like(chi_qsm,   net_output32, is_mask=False)
+        V_I       = self._resize_like(V_I,       net_output32, is_mask=False)
+        brain_mask= self._resize_like(brain_mask,net_output32, is_mask=True)
+
+        # softmax on fp32 logits
+        probs = torch.softmax(net_output32, dim=1)
+        vein_p = probs[:, self.vein_channel:self.vein_channel+1]  # (B,1,*,*,*)
 
         alpha, tau = self.alpha_tau
 
-        # --- Frangi on image (prior, no grads) ---
+        # ---- gate from image Frangi (prior, no grad) ----
         with torch.no_grad():
-
             V_gate = torch.sigmoid(alpha * (V_I - tau))
-            # tiny dilation to bridge small breaks
             V_gate = F.max_pool3d(V_gate, kernel_size=3, stride=1, padding=1)
 
-            V_gate = torch.nan_to_num(V_gate, nan=0.0, posinf=1.0, neginf=0.0)
-            V_gate = V_gate.clamp(0.0, 1.0)
-        
-        P_blur = F.avg_pool3d(F.pad(vein_p, (1,1,1,1,1,1), mode='reflect'),
-                      kernel_size=3, stride=1)
+        valid = (V_gate > 0.5) & (brain_mask > 0)
 
-        # --- cut gradient *through* Frangi itself ---
+        # ---- Frangi on prediction: NO grad through Frangi ----
         with torch.no_grad():
-            P_blur32 = P_blur.float()
-            V_P32, _ = frangi_3d(
-                P_blur32,
+            # smooth prob
+            P_blur = F.avg_pool3d(
+                F.pad(vein_p, (1,1,1,1,1,1), mode='reflect'),
+                kernel_size=3, stride=1
+            )
+            V_P_prior, _ = frangi_3d(
+                P_blur,
                 sigmas=self.sig_mask,
                 alpha=0.8,
                 beta=0.8,
@@ -383,93 +377,37 @@ class FrangiLoss(nn.Module):
                 bright_vessels=True,
                 return_scale=False
             )
-        V_P = V_P32.to(net_output.dtype)
+            V_P_prior = V_P_prior.clamp(0.0, 1.0)
 
-        # V_P, _ = frangi_3d(
-        #     P_blur, self.sig_mask, 0.8, 0.8, 4.0, True, False
-        # )
-        
-        valid = (V_gate > 0.5) & (brain_mask > 0)
+        # ---- now ALL grads come from simple comparisons: vein_p → loss ----
         margin = 0.1
 
-        # if self._dbg_count < 5:
-        #     print("=== FrangiLoss DEBUG ===", flush=True)
-        #     print("vein_p requires_grad:", vein_p.requires_grad, flush=True)
-        #     print("P_blur requires_grad:", P_blur.requires_grad, flush=True)
-        #     print("V_P   requires_grad:", V_P.requires_grad, flush=True)
-        #     print("chi_qsm min/max:", float(chi_qsm.min()), float(chi_qsm.max()), flush=True)
-        #     print("V_I    min/max:", float(V_I.min()), float(V_I.max()), flush=True)
-        #     print("V_gate min/max:", float(V_gate.min()), float(V_gate.max()), flush=True)
-        #     print("valid voxels:", int(valid.sum().item()), "of", V_gate.numel(), flush=True)
-        #     print("brain_mask voxels:", int(brain_mask.sum().item()), flush=True)
-        #     self._dbg_count += 1
-        
         if valid.any():
             vmask = valid
-            # Reward tubeness
-            loss_selfV = -((V_P * V_gate)[vmask]).mean()
-            # Completion hinge
-            loss_hinge = ((torch.relu((V_I + margin) - V_P) * V_gate)[vmask]).mean()
+
+            # encourage high vein prob where Frangi(P) & Frangi(QSM) agree
+            # (V_P_prior and V_gate are treated as fixed priors)
+            target_tube = (V_P_prior * V_gate).detach()
+
+            # 1) selfV: encourage vein_p ≈ target_tube inside gate
+            loss_selfV = F.mse_loss(vein_p[vmask], target_tube[vmask])
+
+            # 2) completion hinge: want vein_p >= V_I + margin inside gate
+            desired = (V_I + margin).clamp(0.0, 1.0)
+            hinge_term = torch.relu(desired - vein_p)
+            loss_hinge = (hinge_term * V_gate)[vmask].mean()
         else:
-            # No valid pixels – don’t let this blow up
-            loss_selfV = V_P.new_zeros(())
-            loss_hinge = V_P.new_zeros(())
+            loss_selfV = vein_p.new_zeros(())
+            loss_hinge = vein_p.new_zeros(())
 
-        # --- Core objectives ---
-        # Reward tubeness where image suggests vessels
-        # loss_selfV = -((V_P * V_gate)[valid]).mean()
-        # # One-sided completion hinge: push V_P >= V_I + margin inside gate
-        # margin = 0.1
-        # loss_hinge = ((torch.relu((V_I+margin) - V_P) * V_gate)[valid]).mean()
-        # Suppress predictions where image is confidently non-tubular
-        # Suppress predictions where image is confidently non-tubular
-        # non_vessel mask: low Frangi AND inside brain
-        non_vessel = ((V_I < 0.05) & (brain_mask > 0)).float()
+        # 3) background suppression: penalize vein prob where image is confidently non-tubular
+        non_vessel = (V_I < 0.05).float()
+        denom = non_vessel.sum().clamp_min(1.0)
+        loss_bg = (vein_p * non_vessel).sum() / denom
 
-        # Clean up any NaNs in the mask
-        non_vessel = torch.nan_to_num(non_vessel, nan=0.0, posinf=0.0, neginf=0.0)
+        # ---- combine, clamp → fp16-safe ----
+        loss = 5.0 * loss_selfV + 10.0 * loss_hinge + 10.0 * loss_bg
+        loss = torch.nan_to_num(loss, nan=0.0, posinf=1e3, neginf=-1e3)
 
-        # Compute in full precision to avoid fp16 weirdness
-        with autocast(enabled=False):
-            vein_p32      = torch.nan_to_num(vein_p.float(), nan=0.0, posinf=1.0, neginf=0.0)
-            non_vessel32  = non_vessel.float()
-
-            denom = non_vessel32.sum().clamp_min(1.0)
-            num   = (vein_p32 * non_vessel32).sum()
-
-            # Defensive: if something still went wrong, zero it out
-            if not torch.isfinite(num):
-                num = num.new_zeros(())
-
-            loss_bg32 = num / denom
-
-        loss_bg = loss_bg32.to(net_output.dtype)
-
-        # Weights (tune as needed)
-        loss = (5*loss_selfV + 10*loss_hinge + 10*loss_bg)
-
-        # snapshot originals for logging
-        selfV_raw  = loss_selfV
-        hinge_raw  = loss_hinge
-        bg_raw     = loss_bg
-
-        # sanitize in-place
-        if not torch.isfinite(loss_selfV).item():
-            print("[WARN] FrangiLoss non-finite selfV: "
-                f"selfV={float(selfV_raw)}, hinge={float(hinge_raw)}, bg={float(bg_raw)}",
-                flush=True)
-            loss_selfV = torch.nan_to_num(loss_selfV, nan=0.0, posinf=0.0, neginf=0.0)
-
-        if not torch.isfinite(loss_hinge).item():
-            print("[WARN] FrangiLoss non-finite hinge: "
-                f"selfV={float(selfV_raw)}, hinge={float(hinge_raw)}, bg={float(bg_raw)}",
-                flush=True)
-            loss_hinge = torch.nan_to_num(loss_hinge, nan=0.0, posinf=0.0, neginf=0.0)
-
-        if not torch.isfinite(loss_bg).item():
-            print("[WARN] FrangiLoss non-finite bg: "
-                f"selfV={float(selfV_raw)}, hinge={float(hinge_raw)}, bg={float(bg_raw)}",
-                flush=True)
-            loss_bg = torch.nan_to_num(loss_bg, nan=0.0, posinf=0.0, neginf=0.0)
-            
-        return loss
+        # return in same dtype as net_output for AMP / GradScaler
+        return loss.to(net_output.dtype)
