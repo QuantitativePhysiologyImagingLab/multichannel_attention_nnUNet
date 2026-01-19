@@ -346,6 +346,9 @@ class FrangiLoss(nn.Module):
             V_gate = torch.sigmoid(alpha * (V_I - tau))
             # tiny dilation to bridge small breaks
             V_gate = F.max_pool3d(V_gate, kernel_size=3, stride=1, padding=1)
+
+            V_gate = torch.nan_to_num(V_gate, nan=0.0, posinf=1.0, neginf=0.0)
+            V_gate = V_gate.clamp(0.0, 1.0)
         
         # --- Frangi on prediction (differentiable) ---
         P_blur = F.avg_pool3d(F.pad(vein_p, (1,1,1,1,1,1), mode='reflect'), kernel_size=3, stride=1)
