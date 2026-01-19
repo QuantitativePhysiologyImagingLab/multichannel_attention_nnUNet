@@ -1196,10 +1196,25 @@ class nnUNetTrainerPhysicsWithAttentionUnsupervised(nnUNetTrainer):
         # ---------- backward ----------
         if self.grad_scaler is not None:
             self.grad_scaler.scale(l).backward()
-
-            # unscale + grad clip + guard
             self.grad_scaler.unscale_(self.optimizer)
-            max_norm = 1.0  # start conservative
+
+            bad_params = []
+            for name, p in self.network.named_parameters():
+                if p.grad is None:
+                    continue
+                if not torch.isfinite(p.grad).all():
+                    gmin = float(torch.nan_to_num(p.grad).min())
+                    gmax = float(torch.nan_to_num(p.grad).max())
+                    print(f"[BAD GRAD] {name}: finite?={torch.isfinite(p.grad).all().item()} "
+                        f"min={gmin} max={gmax}", flush=True)
+                    bad_params.append(name)
+
+            if bad_params:
+                print("[WARN] Non-finite grads in:", bad_params, flush=True)
+                self.optimizer.zero_grad(set_to_none=True)
+                self.grad_scaler.update()
+                return {'loss': float('nan')}
+            
             grad_norm = torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm)
 
             if not torch.isfinite(torch.tensor(grad_norm)):
