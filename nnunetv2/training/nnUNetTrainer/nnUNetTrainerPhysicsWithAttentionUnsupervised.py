@@ -613,7 +613,7 @@ class nnUNetTrainerPhysicsWithAttentionUnsupervised(nnUNetTrainer):
                             weight_dice=0.1, 
                             weight_tversky=0, 
                             weight_physics=20, 
-                            weight_frangi=0.2,
+                            weight_frangi=0,
                             ignore_label=self.label_manager.ignore_label,
                             dice_class=MemoryEfficientSoftDiceLoss)
 
@@ -1215,7 +1215,7 @@ class nnUNetTrainerPhysicsWithAttentionUnsupervised(nnUNetTrainer):
                 self.grad_scaler.update()
                 return {'loss': float('nan')}
             
-            grad_norm = torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm)
+            grad_norm = torch.nn.utils.clip_grad_norm_(self.network.parameters(), 1.0)
 
             if not torch.isfinite(torch.tensor(grad_norm)):
                 print(f"[WARN] non-finite grad norm: {grad_norm}, skipping optimizer step", flush=True)
