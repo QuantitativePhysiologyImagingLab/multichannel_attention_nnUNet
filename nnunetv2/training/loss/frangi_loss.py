@@ -208,13 +208,16 @@ def _frangi_3d_single(
     orig_dtype = H.dtype
     H32 = H.to(torch.float32)
 
-    # replace NaN / Inf with finite values
+    # make sure it's symmetric & finite
+    H32 = 0.5 * (H32 + H32.transpose(-1, -2))
     H32 = torch.nan_to_num(H32, nan=0.0, posinf=1e4, neginf=-1e4)
+    H32 = H32.clamp(min=-1e4, max=1e4)
 
-    # optionally clamp extreme values (defensive)
-    H32 = H32.clamp(min=-1e8, max=1e4)
-
-    evals32, evecs32 = eigh_3x3_symmetric(H32)
+    # eigen-decomp with torch.linalg.eigh (stable & differentiable)
+    H_flat = H32.view(-1, 3, 3)                    # (B*DHW, 3, 3)
+    evals32, evecs32 = torch.linalg.eigh(H_flat)   # eigenvalues ascending
+    evals32 = evals32.view(B, -1, 3)               # (B, D*H*W, 3)
+    evecs32 = evecs32.view(B, -1, 3, 3)            # (B, D*H*W, 3, 3)
 
     evals = evals32.to(orig_dtype)
     evecs = evecs32.to(orig_dtype)
