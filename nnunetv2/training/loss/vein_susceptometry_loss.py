@@ -40,6 +40,9 @@ class PhysicsFieldLoss(nn.Module):
                  chi_blood_bounds=(0.15, 0.45),
                  debug=True):
         super().__init__()
+
+        self.debug = debug
+
         self.vein_channel = vein_channel
         self.topk_frac = float(topk_frac)
         self.lambdas = dict(phys=0.55, mae=0.25, tail=0.15, sign=0.05) if lambdas is None else dict(lambdas)

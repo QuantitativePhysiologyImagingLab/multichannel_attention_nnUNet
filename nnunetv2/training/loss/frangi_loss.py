@@ -406,12 +406,35 @@ class FrangiLoss(nn.Module):
 
         # 3) background suppression: penalize vein prob where image is confidently non-tubular
         non_vessel = (V_I < 0.05).float()
-        denom = non_vessel.sum().clamp_min(1.0)
+        # denom = non_vessel.sum().clamp_min(1.0)
         loss_bg = torch.mean(torch.square(vein_p * non_vessel))
 
         # ---- combine, clamp → fp16-safe ----
         loss = 5.0 * loss_selfV + 10.0 * loss_hinge + 10.0 * loss_bg
-        loss = torch.nan_to_num(loss, nan=0.0, posinf=1e3, neginf=-1e3)
+
+        # snapshot originals for logging
+        selfV_raw  = loss_selfV
+        hinge_raw  = loss_hinge
+        bg_raw     = loss_bg
+
+        # sanitize in-place
+        if not torch.isfinite(loss_selfV).item():
+            print("[WARN] FrangiLoss non-finite selfV: "
+                f"selfV={float(selfV_raw)}, hinge={float(hinge_raw)}, bg={float(bg_raw)}",
+                flush=True)
+            # loss_selfV = torch.nan_to_num(loss_selfV, nan=0.0, posinf=0.0, neginf=0.0)
+
+        if not torch.isfinite(loss_hinge).item():
+            print("[WARN] FrangiLoss non-finite hinge: "
+                f"selfV={float(selfV_raw)}, hinge={float(hinge_raw)}, bg={float(bg_raw)}",
+                flush=True)
+            # loss_hinge = torch.nan_to_num(loss_hinge, nan=0.0, posinf=0.0, neginf=0.0)
+
+        if not torch.isfinite(loss_bg).item():
+            print("[WARN] FrangiLoss non-finite bg: "
+                f"selfV={float(selfV_raw)}, hinge={float(hinge_raw)}, bg={float(bg_raw)}",
+                flush=True)
+            # loss_bg = torch.nan_to_num(loss_bg, nan=0.0, posinf=0.0, neginf=0.0)
 
         # return in same dtype as net_output for AMP / GradScaler
         return loss.to(net_output.dtype)
