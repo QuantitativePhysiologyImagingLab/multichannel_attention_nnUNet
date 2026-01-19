@@ -421,9 +421,28 @@ class FrangiLoss(nn.Module):
         # margin = 0.1
         # loss_hinge = ((torch.relu((V_I+margin) - V_P) * V_gate)[valid]).mean()
         # Suppress predictions where image is confidently non-tubular
-        non_vessel = (V_I < 0.05).float()
-        denom = non_vessel.sum().clamp_min(1)
-        loss_bg = (vein_p * non_vessel).sum() / denom
+        # Suppress predictions where image is confidently non-tubular
+        # non_vessel mask: low Frangi AND inside brain
+        non_vessel = ((V_I < 0.05) & (brain_mask > 0)).float()
+
+        # Clean up any NaNs in the mask
+        non_vessel = torch.nan_to_num(non_vessel, nan=0.0, posinf=0.0, neginf=0.0)
+
+        # Compute in full precision to avoid fp16 weirdness
+        with autocast(enabled=False):
+            vein_p32      = torch.nan_to_num(vein_p.float(), nan=0.0, posinf=1.0, neginf=0.0)
+            non_vessel32  = non_vessel.float()
+
+            denom = non_vessel32.sum().clamp_min(1.0)
+            num   = (vein_p32 * non_vessel32).sum()
+
+            # Defensive: if something still went wrong, zero it out
+            if not torch.isfinite(num):
+                num = num.new_zeros(())
+
+            loss_bg32 = num / denom
+
+        loss_bg = loss_bg32.to(net_output.dtype)
 
         # Weights (tune as needed)
         loss = (5*loss_selfV + 10*loss_hinge + 10*loss_bg)
