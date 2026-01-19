@@ -341,21 +341,32 @@ class FrangiLoss(nn.Module):
             # tiny dilation to bridge small breaks
             V_gate = F.max_pool3d(V_gate, kernel_size=3, stride=1, padding=1)
         
-        valid = (V_gate > 0.5) & (brain_mask > 0)
-
         # --- Frangi on prediction (differentiable) ---
-        # light blur for stability of Hessian on probability map
         P_blur = F.avg_pool3d(F.pad(vein_p, (1,1,1,1,1,1), mode='reflect'), kernel_size=3, stride=1)
         V_P, _ = frangi_3d(
             P_blur, self.sig_mask, 0.8, 0.8, 4.0, True, False
         )
+        
+        valid = (V_gate > 0.5) & (brain_mask > 0)
+        margin = 0.1
+        
+        if valid.any():
+            vmask = valid
+            # Reward tubeness
+            loss_selfV = -((V_P * V_gate)[vmask]).mean()
+            # Completion hinge
+            loss_hinge = ((torch.relu((V_I + margin) - V_P) * V_gate)[vmask]).mean()
+        else:
+            # No valid pixels – don’t let this blow up
+            loss_selfV = V_P.new_zeros(())
+            loss_hinge = V_P.new_zeros(())
 
         # --- Core objectives ---
         # Reward tubeness where image suggests vessels
-        loss_selfV = -((V_P * V_gate)[valid]).mean()
-        # One-sided completion hinge: push V_P >= V_I + margin inside gate
-        margin = 0.1
-        loss_hinge = ((torch.relu((V_I+margin) - V_P) * V_gate)[valid]).mean()
+        # loss_selfV = -((V_P * V_gate)[valid]).mean()
+        # # One-sided completion hinge: push V_P >= V_I + margin inside gate
+        # margin = 0.1
+        # loss_hinge = ((torch.relu((V_I+margin) - V_P) * V_gate)[valid]).mean()
         # Suppress predictions where image is confidently non-tubular
         non_vessel = (V_I < 0.05).float()
         denom = non_vessel.sum().clamp_min(1)
