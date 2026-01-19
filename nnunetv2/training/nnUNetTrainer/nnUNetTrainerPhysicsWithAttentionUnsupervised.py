@@ -1191,7 +1191,7 @@ class nnUNetTrainerPhysicsWithAttentionUnsupervised(nnUNetTrainer):
             l = self.loss(net_out, target, data, b0_dir=b0_dirs)
 
         if not torch.isfinite(l):
-            # print(f"[WARN] total loss non-finite: {float(l)}; skipping batch", flush=True)
+            print(f"[WARN] total loss non-finite: {float(l)}; skipping batch", flush=True)
             return {'loss': float('nan')}
 
         # ---------- backward ----------
@@ -1211,7 +1211,7 @@ class nnUNetTrainerPhysicsWithAttentionUnsupervised(nnUNetTrainer):
                     bad_params.append(name)
 
             if bad_params:
-                # print("[WARN] Non-finite grads in:", bad_params, flush=True)
+                print("[WARN] Non-finite grads in:", bad_params, flush=True)
                 self.optimizer.zero_grad(set_to_none=True)
                 self.grad_scaler.update()
                 return {'loss': float('nan')}
@@ -1219,7 +1219,7 @@ class nnUNetTrainerPhysicsWithAttentionUnsupervised(nnUNetTrainer):
             grad_norm = torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12.0)
 
             if not torch.isfinite(torch.tensor(grad_norm)):
-                # print(f"[WARN] non-finite grad norm: {grad_norm}, skipping optimizer step", flush=True)
+                print(f"[WARN] non-finite grad norm: {grad_norm}, skipping optimizer step", flush=True)
                 self.optimizer.zero_grad(set_to_none=True)
                 self.grad_scaler.update()
                 return {'loss': float('nan')}
@@ -1230,7 +1230,7 @@ class nnUNetTrainerPhysicsWithAttentionUnsupervised(nnUNetTrainer):
             l.backward()
             grad_norm = torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)
             if not torch.isfinite(torch.tensor(grad_norm)):
-                # print(f"[WARN] non-finite grad norm (no AMP): {grad_norm}, skipping optimizer step", flush=True)
+                print(f"[WARN] non-finite grad norm (no AMP): {grad_norm}, skipping optimizer step", flush=True)
                 self.optimizer.zero_grad(set_to_none=True)
                 return {'loss': float('nan')}
             self.optimizer.step()
