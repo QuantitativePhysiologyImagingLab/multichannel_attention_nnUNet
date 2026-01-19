@@ -1171,6 +1171,10 @@ class nnUNetTrainerPhysicsWithAttentionUnsupervised(nnUNetTrainer):
             l.backward()
             torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)
             self.optimizer.step()
+
+        if not torch.isfinite(l):
+            self.print_to_log_file(f"[WARN] Non-finite loss: {float(l)} — skipping update")
+            return {'loss': float('nan')}
         return {'loss': l.detach().cpu().numpy()}
 
     def on_train_epoch_end(self, train_outputs: List[dict]):
