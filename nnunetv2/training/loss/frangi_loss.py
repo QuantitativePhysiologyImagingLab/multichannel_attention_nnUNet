@@ -216,15 +216,15 @@ def _frangi_3d_single(
     # eigen-decomp with torch.linalg.eigh (stable & differentiable)
     H_flat = H32.view(-1, 3, 3)                    # (B*DHW, 3, 3)
 
-    finite_mask = torch.isfinite(H_flat)
-    if not finite_mask.all():
-        bad_count = (~finite_mask).sum().item()
-        print(f"[FRANGI EIGH] Non-finite entries in H_flat: {bad_count}", flush=True)
-        bad_vals = H_flat[~finite_mask]
-        print("[FRANGI EIGH] Example bad values:", bad_vals[:10], flush=True)
-        H_flat = torch.nan_to_num(H_flat, nan=0.0, posinf=1e4, neginf=-1e4)
+    # finite_mask = torch.isfinite(H_flat)
+    # if not finite_mask.all():
+    #     bad_count = (~finite_mask).sum().item()
+    #     print(f"[FRANGI EIGH] Non-finite entries in H_flat: {bad_count}", flush=True)
+    #     bad_vals = H_flat[~finite_mask]
+    #     print("[FRANGI EIGH] Example bad values:", bad_vals[:10], flush=True)
+    #     H_flat = torch.nan_to_num(H_flat, nan=0.0, posinf=1e4, neginf=-1e4)
     
-    # 🔄 analytic symmetric 3x3 eigensolver (no cuSOLVER)
+    #  analytic symmetric 3x3 eigensolver (no cuSOLVER)
     evals32, evecs32 = eigh_3x3_symmetric(H_flat)
 
     # reshape back to (B, D*H*W, 3) and (B, D*H*W, 3, 3)
