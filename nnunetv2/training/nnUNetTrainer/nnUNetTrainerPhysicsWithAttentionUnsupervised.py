@@ -610,7 +610,7 @@ class nnUNetTrainerPhysicsWithAttentionUnsupervised(nnUNetTrainer):
                             {},
                             {},
                             weight_ce=0, 
-                            weight_dice=0.5, 
+                            weight_dice=0.1, 
                             weight_tversky=0, 
                             weight_physics=20, 
                             weight_frangi=1,
