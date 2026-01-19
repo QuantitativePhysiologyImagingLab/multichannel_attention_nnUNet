@@ -164,11 +164,11 @@ class VeinPhysics_Frangi_DC_and_CE_loss(nn.Module):
 
         # ---- Frangi term ----
         if self.frangi is not None and self.weight_frangi != 0:
-            with autocast(enabled=False):    
-                frangi_loss = self.frangi(
-                    net_output=net_output,
-                    data=data
-                )
+
+            frangi_loss = self.frangi(
+                net_output=net_output,
+                data=data
+            )
             if self._dbg_count < 5:
                 print(
                     "FRANGI DEBUG:",
