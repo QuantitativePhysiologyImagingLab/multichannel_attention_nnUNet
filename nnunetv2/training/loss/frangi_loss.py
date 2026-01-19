@@ -437,4 +437,4 @@ class FrangiLoss(nn.Module):
             # loss_bg = torch.nan_to_num(loss_bg, nan=0.0, posinf=0.0, neginf=0.0)
 
         # return in same dtype as net_output for AMP / GradScaler
-        return loss.to(net_output.dtype)
+        return loss
