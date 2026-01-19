@@ -130,14 +130,22 @@ class VeinPhysics_Frangi_DC_and_CE_loss(nn.Module):
             target_dice = target[:, :1] if target.shape[1] >= 1 else target  # keep class channel for CE/Dice
 
         # ---- CE & Dice ----
-        dc_loss = self.dc(net_output, target_dice, loss_mask=mask)
-        tversky_loss = self.tversky(net_output, target_dice)
+        if self.weight_dice != 0:
+            dc_loss = self.dc(net_output, target_dice, loss_mask=mask)
+        else:
+            dc_loss = self.dc(net_output.detach(), target_dice, loss_mask=mask)
+        
         ce_loss = self.ce(net_output, target_dice[:, 0]) if (self.weight_ce != 0 and self.ce is not None and (self.ignore_label is None or num_fg > 0)) else 0.0
+
+        if self.weight_tversky != 0:
+            tversky_loss = self.tversky(net_output, target_dice)
+        else:
+            tversky_loss = self.tversky(net_output.detach(), target_dice)
 
         total = self.weight_ce * ce_loss + self.weight_dice * dc_loss + self.weight_tversky*tversky_loss
 
         # ---- Physics term ----
-        if self.vpl is not None:
+        if self.vpl is not None and self.weight_physics != 0:
             # normalize b0_dir shape
             if b0_dir is not None:
                 if b0_dir.ndim == 1:  # (3,)
