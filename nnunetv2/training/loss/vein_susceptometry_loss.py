@@ -37,7 +37,8 @@ class PhysicsFieldLoss(nn.Module):
                  expects_b0_from_forward=True,         # require b0_dir in forward by default
                  eval_mask_mode='predicted_hard',      # or 'provided'
                  learnable_chi=False,
-                 chi_blood_bounds=(0.15, 0.45)):
+                 chi_blood_bounds=(0.15, 0.45),
+                 debug=True):
         super().__init__()
         self.vein_channel = vein_channel
         self.topk_frac = float(topk_frac)
@@ -157,6 +158,26 @@ class PhysicsFieldLoss(nn.Module):
         # Full-volume dipole forward model
         B_pred = self._dipole_field_from_chi(chi_total, self.default_voxel_size, b0_dir)  # (B,1,X,Y,Z)
 
+                # Full-volume dipole forward model
+        B_pred = self._dipole_field_from_chi(chi_total, self.default_voxel_size, b0_dir)  # (B,1,X,Y,Z)
+
+        # ---------- DEBUG: check B_pred ----------
+        if self.debug:
+            finite = torch.isfinite(B_pred)
+            if not finite.all():
+                bad = ~finite
+                print(
+                    "[PHYSICS DEBUG] B_pred has non-finite values: "
+                    f"count={bad.sum().item()} "
+                    f"min={float(B_pred[finite].min()) if finite.any() else 'n/a'} "
+                    f"max={float(B_pred[finite].max()) if finite.any() else 'n/a'}",
+                    flush=True
+                )
+            else:
+                max_abs = float(B_pred.abs().max())
+                if max_abs > 1e2:
+                    print(f"[PHYSICS DEBUG] B_pred abs max unusually large: {max_abs}", flush=True)
+
         # ----- physics terms (mirroring your previous script) -----
 
         # 1) Weighted whole-brain MAE (evidence = |B_meas|, normalized & capped)
@@ -187,6 +208,37 @@ class PhysicsFieldLoss(nn.Module):
              self.lambdas['mae']  * mae_masked +
              self.lambdas['tail'] * top10 +
              self.lambdas['sign'] * sign_hinge)
+        
+        # ---------- DEBUG: check components & total ----------
+        if self.debug:
+            def _stat(x):
+                return float(x), float(x.abs().max())
+
+            lp, lp_max = _stat(loss_phys)
+            lm, lm_max = _stat(mae_masked)
+            lt, lt_max = _stat(top10)
+            ls, ls_max = _stat(sign_hinge)
+            L_val, L_max = _stat(L)
+
+            if (not torch.isfinite(loss_phys)) or (not torch.isfinite(mae_masked)) \
+               or (not torch.isfinite(top10))   or (not torch.isfinite(sign_hinge)) \
+               or (not torch.isfinite(L)):
+                print("[PHYSICS NAN] non-finite component detected:", flush=True)
+                print(f"  loss_phys={lp}, |.|_max={lp_max}", flush=True)
+                print(f"  mae_masked={lm}, |.|_max={lm_max}", flush=True)
+                print(f"  top10={lt}, |.|_max={lt_max}", flush=True)
+                print(f"  sign_hinge={ls}, |.|_max={ls_max}", flush=True)
+                print(f"  L_total={L_val}, |.|_max={L_max}", flush=True)
+            else:
+                # Optional: only log if something is huge
+                thresh = 1e2
+                if max(lp_max, lm_max, lt_max, ls_max, L_max) > thresh:
+                    print("[PHYSICS DEBUG] large physics term:", flush=True)
+                    print(f"  loss_phys={lp}, |.|_max={lp_max}", flush=True)
+                    print(f"  mae_masked={lm}, |.|_max={lm_max}", flush=True)
+                    print(f"  top10={lt}, |.|_max={lt_max}", flush=True)
+                    print(f"  sign_hinge={ls}, |.|_max={ls_max}", flush=True)
+                    print(f"  L_total={L_val}, |.|_max={L_max}", flush=True)
         
         # print(L)
 
