@@ -351,6 +351,7 @@ class FrangiLoss(nn.Module):
         # softmax on fp32 logits
         probs = torch.softmax(net_output32, dim=1)
         vein_p = probs[:, self.vein_channel:self.vein_channel+1]  # (B,1,*,*,*)
+        vein_p = vein_p.clamp(0.0, 1.0)
 
         alpha, tau = self.alpha_tau
 
@@ -390,11 +391,14 @@ class FrangiLoss(nn.Module):
             target_tube = (V_P_prior * V_gate).detach()
 
             # 1) selfV: encourage vein_p ≈ target_tube inside gate
-            loss_selfV = F.mse_loss(vein_p[vmask], target_tube[vmask])
+            eps = 1e-6
+            pt = vein_p[vmask].clamp(eps, 1-eps)
+            tt = target_tube[vmask].clamp(eps, 1-eps)
+            loss_selfV = (tt * (tt/pt).log() + (1-tt) * ((1-tt)/(1-pt)).log()).mean()
 
             # 2) completion hinge: want vein_p >= V_I + margin inside gate
             desired = (V_I + margin).clamp(0.0, 1.0)
-            hinge_term = torch.relu(desired - vein_p)
+            hinge_term = F.softplus(desired - vein_p, beta=10.0)
             loss_hinge = (hinge_term * V_gate)[vmask].mean()
         else:
             loss_selfV = vein_p.new_zeros(())
@@ -403,7 +407,7 @@ class FrangiLoss(nn.Module):
         # 3) background suppression: penalize vein prob where image is confidently non-tubular
         non_vessel = (V_I < 0.05).float()
         denom = non_vessel.sum().clamp_min(1.0)
-        loss_bg = (vein_p * non_vessel).sum() / denom
+        loss_bg = torch.mean(torch.square(vein_p * non_vessel))
 
         # ---- combine, clamp → fp16-safe ----
         loss = 5.0 * loss_selfV + 10.0 * loss_hinge + 10.0 * loss_bg
