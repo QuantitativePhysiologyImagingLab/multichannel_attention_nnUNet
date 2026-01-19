@@ -318,7 +318,7 @@ class nnUNetTrainerPhysicsWithAttentionUnsupervised(nnUNetTrainer):
         # logging
         timestamp = datetime.now()
         maybe_mkdir_p(self.output_folder)
-        print()
+        print(self.output_folder)
         self.log_file = join(self.output_folder, "training_log_%d_%d_%d_%02.0d_%02.0d_%02.0d.txt" %
                              (timestamp.year, timestamp.month, timestamp.day, timestamp.hour, timestamp.minute,
                               timestamp.second))
@@ -1174,8 +1174,8 @@ class nnUNetTrainerPhysicsWithAttentionUnsupervised(nnUNetTrainer):
             o = o.clamp(min=-20.0, max=20.0)
 
             if not torch.isfinite(o).all():
-                print(f"[FATAL] net_output[{i}] has non-finite values even after clamp, skipping batch",
-                    flush=True)
+                # print(f"[FATAL] net_output[{i}] has non-finite values even after clamp, skipping batch",
+                    # flush=True)
                 return {'loss': float('nan')}
 
             safe_outputs.append(o)
@@ -1191,7 +1191,7 @@ class nnUNetTrainerPhysicsWithAttentionUnsupervised(nnUNetTrainer):
             l = self.loss(net_out, target, data, b0_dir=b0_dirs)
 
         if not torch.isfinite(l):
-            print(f"[WARN] total loss non-finite: {float(l)}; skipping batch", flush=True)
+            # print(f"[WARN] total loss non-finite: {float(l)}; skipping batch", flush=True)
             return {'loss': float('nan')}
 
         # ---------- backward ----------
@@ -1206,20 +1206,20 @@ class nnUNetTrainerPhysicsWithAttentionUnsupervised(nnUNetTrainer):
                 if not torch.isfinite(p.grad).all():
                     gmin = float(torch.nan_to_num(p.grad).min())
                     gmax = float(torch.nan_to_num(p.grad).max())
-                    print(f"[BAD GRAD] {name}: finite?={torch.isfinite(p.grad).all().item()} "
-                        f"min={gmin} max={gmax}", flush=True)
+                    # print(f"[BAD GRAD] {name}: finite?={torch.isfinite(p.grad).all().item()} "
+                        # f"min={gmin} max={gmax}", flush=True)
                     bad_params.append(name)
 
             if bad_params:
-                print("[WARN] Non-finite grads in:", bad_params, flush=True)
+                # print("[WARN] Non-finite grads in:", bad_params, flush=True)
                 self.optimizer.zero_grad(set_to_none=True)
                 self.grad_scaler.update()
                 return {'loss': float('nan')}
             
-            grad_norm = torch.nn.utils.clip_grad_norm_(self.network.parameters(), 1.0)
+            grad_norm = torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12.0)
 
             if not torch.isfinite(torch.tensor(grad_norm)):
-                print(f"[WARN] non-finite grad norm: {grad_norm}, skipping optimizer step", flush=True)
+                # print(f"[WARN] non-finite grad norm: {grad_norm}, skipping optimizer step", flush=True)
                 self.optimizer.zero_grad(set_to_none=True)
                 self.grad_scaler.update()
                 return {'loss': float('nan')}
@@ -1228,10 +1228,9 @@ class nnUNetTrainerPhysicsWithAttentionUnsupervised(nnUNetTrainer):
             self.grad_scaler.update()
         else:
             l.backward()
-            max_norm = 1.0
-            grad_norm = torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm)
+            grad_norm = torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)
             if not torch.isfinite(torch.tensor(grad_norm)):
-                print(f"[WARN] non-finite grad norm (no AMP): {grad_norm}, skipping optimizer step", flush=True)
+                # print(f"[WARN] non-finite grad norm (no AMP): {grad_norm}, skipping optimizer step", flush=True)
                 self.optimizer.zero_grad(set_to_none=True)
                 return {'loss': float('nan')}
             self.optimizer.step()
