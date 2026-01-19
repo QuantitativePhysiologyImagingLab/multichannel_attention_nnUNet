@@ -290,7 +290,7 @@ class nnUNetTrainerPhysicsWithAttentionUnsupervised(nnUNetTrainer):
                 if self.is_cascaded else None
 
         ### Some hyperparameters for you to fiddle with
-        self.initial_lr = 1e-2
+        self.initial_lr = 1e-3
         self.weight_decay = 3e-5
         self.oversample_foreground_percent = 0.33
         self.probabilistic_oversampling = False
@@ -1140,27 +1140,6 @@ class nnUNetTrainerPhysicsWithAttentionUnsupervised(nnUNetTrainer):
         phase = data[:, 1:2, ...]
         keys  = batch['keys']       # list of case identifiers length B
 
-        def _check_finite_out(out):
-            if isinstance(out, (list, tuple)):
-                for j, o in enumerate(out):
-                    if not torch.isfinite(o).all():
-                        print(f"[FATAL] net_output[{j}] has non-finite values", flush=True)
-                        print("  min:", float(torch.nanmin(o)),
-                            "max:", float(torch.nanmax(o)),
-                            "non-finite count:", int((~torch.isfinite(o)).sum()),
-                            flush=True)
-                        return False
-                return True
-            else:
-                if not torch.isfinite(out).all():
-                    print("[FATAL] net_output has non-finite values", flush=True)
-                    print("  min:", float(torch.nanmin(out)),
-                        "max:", float(torch.nanmax(out)),
-                        "non-finite count:", int((~torch.isfinite(out)).sum()),
-                        flush=True)
-                    return False
-                return True
-
         # build (B,3) tensor of B0 directions in voxel coords
         b0_dirs = torch.stack([self._get_case_B0(k) for k in keys], dim=0).to(self.device)
 
@@ -1175,37 +1154,72 @@ class nnUNetTrainerPhysicsWithAttentionUnsupervised(nnUNetTrainer):
         # If the device_type is 'cpu' then it's slow as heck and needs to be disabled.
         # If the device_type is 'mps' then it will complain that mps is not implemented, even if enabled=False is set. Whyyyyyyy. (this is why we don't make use of enabled=False)
         # So autocast will only be active if we have a cuda device.
-        with autocast(self.device.type, enabled=True) if self.device.type == 'cuda' else dummy_context():
-            output = self.network(data)
-            if not _check_finite_out(output):
-                print("[FATAL] net_output has non-finite values", flush=True)
-                print("  min:", float(torch.nanmin(output)),
-                    "max:", float(torch.nanmax(output)),
-                    "non-finite count:", int((~torch.isfinite(output)).sum()), flush=True)
-                self.optimizer.zero_grad(set_to_none=True)
-                return {'loss': float('nan')}
-            # del data
-            l = self.loss(output, target, data, b0_dir=b0_dirs)
+        # ----- forward -----
+        with autocast(self.device.type, enabled=(self.device.type == 'cuda')):
+            net_out = self.network(data)
 
-        if not torch.isfinite(l).item():
-            print(f"[WARN] Non-finite TOTAL loss: {float(l)} — skipping backward/step", flush=True)
-            self.optimizer.zero_grad(set_to_none=True)
+        # Make a list of heads, even if there's only one
+        if isinstance(net_out, (list, tuple)):
+            outputs = list(net_out)
+        else:
+            outputs = [net_out]
+
+        # ---------- sanitize & clamp logits per head ----------
+        safe_outputs = []
+        for i, o in enumerate(outputs):
+            # sanitize
+            o = torch.nan_to_num(o, nan=0.0, posinf=0.0, neginf=0.0)
+            # clamp logits – prevents crazy softmax / CE behaviour
+            o = o.clamp(min=-20.0, max=20.0)
+
+            if not torch.isfinite(o).all():
+                print(f"[FATAL] net_output[{i}] has non-finite values even after clamp, skipping batch",
+                    flush=True)
+                return {'loss': float('nan')}
+
+            safe_outputs.append(o)
+
+        # reconstruct same structure for the loss
+        if isinstance(net_out, (list, tuple)):
+            net_out = safe_outputs
+        else:
+            net_out = safe_outputs[0]
+
+        # ---------- loss ----------
+        with autocast(self.device.type, enabled=(self.device.type == 'cuda')):
+            l = self.loss(net_out, target, data, b0_dir=b0_dirs)
+
+        if not torch.isfinite(l):
+            print(f"[WARN] total loss non-finite: {float(l)}; skipping batch", flush=True)
             return {'loss': float('nan')}
 
+        # ---------- backward ----------
         if self.grad_scaler is not None:
             self.grad_scaler.scale(l).backward()
+
+            # unscale + grad clip + guard
             self.grad_scaler.unscale_(self.optimizer)
-            torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)
+            max_norm = 1.0  # start conservative
+            grad_norm = torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm)
+
+            if not torch.isfinite(torch.tensor(grad_norm)):
+                print(f"[WARN] non-finite grad norm: {grad_norm}, skipping optimizer step", flush=True)
+                self.optimizer.zero_grad(set_to_none=True)
+                self.grad_scaler.update()
+                return {'loss': float('nan')}
+
             self.grad_scaler.step(self.optimizer)
             self.grad_scaler.update()
         else:
             l.backward()
-            torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)
+            max_norm = 1.0
+            grad_norm = torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm)
+            if not torch.isfinite(torch.tensor(grad_norm)):
+                print(f"[WARN] non-finite grad norm (no AMP): {grad_norm}, skipping optimizer step", flush=True)
+                self.optimizer.zero_grad(set_to_none=True)
+                return {'loss': float('nan')}
             self.optimizer.step()
 
-        if not torch.isfinite(l):
-            self.print_to_log_file(f"[WARN] Non-finite loss: {float(l)} — skipping update")
-            return {'loss': float('nan')}
         return {'loss': l.detach().cpu().numpy()}
 
     def on_train_epoch_end(self, train_outputs: List[dict]):
