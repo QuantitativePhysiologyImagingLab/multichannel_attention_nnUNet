@@ -609,7 +609,7 @@ class nnUNetTrainerPhysicsWithAttentionUnsupervised(nnUNetTrainer):
                             'do_bg': True, 'smooth': 1e-5, 'ddp': self.is_ddp},
                             {},
                             {},
-                            weight_ce=0, 
+                            weight_ce=0.5, 
                             weight_dice=0.1, 
                             weight_tversky=0, 
                             weight_physics=20, 
