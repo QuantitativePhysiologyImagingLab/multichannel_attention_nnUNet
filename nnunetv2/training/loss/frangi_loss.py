@@ -224,7 +224,10 @@ def _frangi_3d_single(
         print("[FRANGI EIGH] Example bad values:", bad_vals[:10], flush=True)
         H_flat = torch.nan_to_num(H_flat, nan=0.0, posinf=1e4, neginf=-1e4)
     
-    evals32, evecs32 = torch.linalg.eigh(H_flat)   # eigenvalues ascending
+    H_cpu = H_flat.to('cpu')
+    evals32_cpu, evecs32_cpu = torch.linalg.eigh(H_cpu)
+    evals32 = evals32_cpu.to(H_flat.device)
+    evecs32 = evecs32_cpu.to(H_flat.device)
     evals32 = evals32.view(B, -1, 3)               # (B, D*H*W, 3)
     evecs32 = evecs32.view(B, -1, 3, 3)            # (B, D*H*W, 3, 3)
 
