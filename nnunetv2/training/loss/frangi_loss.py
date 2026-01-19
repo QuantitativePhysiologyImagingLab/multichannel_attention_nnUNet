@@ -316,6 +316,11 @@ class FrangiLoss(nn.Module):
         net_output: (B,C,X,Y,Z)
         target:     (B,3,X,Y,Z)  [0]=chi_qsm_ppm, [1]=localfield_ppm, [2]=Frangi_vesselness
         """
+        
+        # --- debug: run a few times only ---
+        if not hasattr(self, "_dbg_count"):
+            self._dbg_count = 0
+            
         # Cast priors to the net’s dtype/device
         chi_qsm = data[:, 0:1].to(device=net_output.device, dtype=net_output.dtype)   # ppm
         V_I  = data[:, 2:3].to(device=net_output.device, dtype=net_output.dtype)   # frangi QSM
@@ -349,6 +354,18 @@ class FrangiLoss(nn.Module):
         
         valid = (V_gate > 0.5) & (brain_mask > 0)
         margin = 0.1
+
+        if self._dbg_count < 5:
+            print("=== FrangiLoss DEBUG ===", flush=True)
+            print("vein_p requires_grad:", vein_p.requires_grad, flush=True)
+            print("P_blur requires_grad:", P_blur.requires_grad, flush=True)
+            print("V_P   requires_grad:", V_P.requires_grad, flush=True)
+            print("chi_qsm min/max:", float(chi_qsm.min()), float(chi_qsm.max()), flush=True)
+            print("V_I    min/max:", float(V_I.min()), float(V_I.max()), flush=True)
+            print("V_gate min/max:", float(V_gate.min()), float(V_gate.max()), flush=True)
+            print("valid voxels:", int(valid.sum().item()), "of", V_gate.numel(), flush=True)
+            print("brain_mask voxels:", int(brain_mask.sum().item()), flush=True)
+            self._dbg_count += 1
         
         if valid.any():
             vmask = valid
