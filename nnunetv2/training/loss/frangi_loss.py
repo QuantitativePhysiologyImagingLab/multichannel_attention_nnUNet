@@ -2,6 +2,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn, Tensor
 from typing import Optional, Sequence, Tuple, Union
+from torch.cuda.amp import autocast
 
 # -----------------------------
 # 1D Gaussian & its derivatives
@@ -348,9 +349,23 @@ class FrangiLoss(nn.Module):
         
         # --- Frangi on prediction (differentiable) ---
         P_blur = F.avg_pool3d(F.pad(vein_p, (1,1,1,1,1,1), mode='reflect'), kernel_size=3, stride=1)
-        V_P, _ = frangi_3d(
-            P_blur, self.sig_mask, 0.8, 0.8, 4.0, True, False
-        )
+        
+        with autocast(enabled=False):
+            P_blur32 = P_blur.float()
+            V_P32, _ = frangi_3d(
+                P_blur32,
+                sigmas=self.sig_mask,
+                alpha=0.8,
+                beta=0.8,
+                c=4.0,
+                bright_vessels=True,
+                return_scale=False
+            )
+        V_P = V_P32.to(net_output.dtype)   # back to fp16 if needed
+
+        # V_P, _ = frangi_3d(
+        #     P_blur, self.sig_mask, 0.8, 0.8, 4.0, True, False
+        # )
         
         valid = (V_gate > 0.5) & (brain_mask > 0)
         margin = 0.1
