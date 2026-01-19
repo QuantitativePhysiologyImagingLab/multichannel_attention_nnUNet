@@ -368,10 +368,11 @@ class FrangiLoss(nn.Module):
             V_gate = torch.nan_to_num(V_gate, nan=0.0, posinf=1.0, neginf=0.0)
             V_gate = V_gate.clamp(0.0, 1.0)
         
-        # --- Frangi on prediction (differentiable) ---
-        P_blur = F.avg_pool3d(F.pad(vein_p, (1,1,1,1,1,1), mode='reflect'), kernel_size=3, stride=1)
-        
-        with autocast(enabled=False):
+        P_blur = F.avg_pool3d(F.pad(vein_p, (1,1,1,1,1,1), mode='reflect'),
+                      kernel_size=3, stride=1)
+
+        # --- cut gradient *through* Frangi itself ---
+        with torch.no_grad():
             P_blur32 = P_blur.float()
             V_P32, _ = frangi_3d(
                 P_blur32,
@@ -382,7 +383,7 @@ class FrangiLoss(nn.Module):
                 bright_vessels=True,
                 return_scale=False
             )
-        V_P = V_P32.to(net_output.dtype)   # back to fp16 if needed
+        V_P = V_P32.to(net_output.dtype)
 
         # V_P, _ = frangi_3d(
         #     P_blur, self.sig_mask, 0.8, 0.8, 4.0, True, False
