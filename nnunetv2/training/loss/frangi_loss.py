@@ -447,11 +447,28 @@ class FrangiLoss(nn.Module):
         # Weights (tune as needed)
         loss = (5*loss_selfV + 10*loss_hinge + 10*loss_bg)
 
-        # last-resort stabilization
-        if not torch.isfinite(loss):
-            # log once or a few times if you want
-            print("[WARN] FrangiLoss produced non-finite value: "
-                  f"selfV={float(loss_selfV)}, hinge={float(loss_hinge)}, bg={float(loss_bg)}")
-            loss = torch.nan_to_num(loss, nan=0.0, posinf=0.0, neginf=0.0)
+        # snapshot originals for logging
+        selfV_raw  = loss_selfV
+        hinge_raw  = loss_hinge
+        bg_raw     = loss_bg
+
+        # sanitize in-place
+        if not torch.isfinite(loss_selfV).item():
+            print("[WARN] FrangiLoss non-finite selfV: "
+                f"selfV={float(selfV_raw)}, hinge={float(hinge_raw)}, bg={float(bg_raw)}",
+                flush=True)
+            loss_selfV = torch.nan_to_num(loss_selfV, nan=0.0, posinf=0.0, neginf=0.0)
+
+        if not torch.isfinite(loss_hinge).item():
+            print("[WARN] FrangiLoss non-finite hinge: "
+                f"selfV={float(selfV_raw)}, hinge={float(hinge_raw)}, bg={float(bg_raw)}",
+                flush=True)
+            loss_hinge = torch.nan_to_num(loss_hinge, nan=0.0, posinf=0.0, neginf=0.0)
+
+        if not torch.isfinite(loss_bg).item():
+            print("[WARN] FrangiLoss non-finite bg: "
+                f"selfV={float(selfV_raw)}, hinge={float(hinge_raw)}, bg={float(bg_raw)}",
+                flush=True)
+            loss_bg = torch.nan_to_num(loss_bg, nan=0.0, posinf=0.0, neginf=0.0)
             
         return loss
