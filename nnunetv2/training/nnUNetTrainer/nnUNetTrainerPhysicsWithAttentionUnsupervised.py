@@ -318,6 +318,7 @@ class nnUNetTrainerPhysicsWithAttentionUnsupervised(nnUNetTrainer):
         # logging
         timestamp = datetime.now()
         maybe_mkdir_p(self.output_folder)
+        print()
         self.log_file = join(self.output_folder, "training_log_%d_%d_%d_%02.0d_%02.0d_%02.0d.txt" %
                              (timestamp.year, timestamp.month, timestamp.day, timestamp.hour, timestamp.minute,
                               timestamp.second))
@@ -613,7 +614,7 @@ class nnUNetTrainerPhysicsWithAttentionUnsupervised(nnUNetTrainer):
                             weight_dice=0.1, 
                             weight_tversky=0, 
                             weight_physics=20, 
-                            weight_frangi=0,
+                            weight_frangi=0.2,
                             ignore_label=self.label_manager.ignore_label,
                             dice_class=MemoryEfficientSoftDiceLoss)
 
