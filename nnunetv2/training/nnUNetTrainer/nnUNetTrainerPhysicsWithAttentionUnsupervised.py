@@ -1157,9 +1157,20 @@ class nnUNetTrainerPhysicsWithAttentionUnsupervised(nnUNetTrainer):
         # So autocast will only be active if we have a cuda device.
         with autocast(self.device.type, enabled=True) if self.device.type == 'cuda' else dummy_context():
             output = self.network(data)
+            if not torch.isfinite(output).all():
+                print("[FATAL] net_output has non-finite values", flush=True)
+                print("  min:", float(torch.nanmin(output)),
+                    "max:", float(torch.nanmax(output)),
+                    "non-finite count:", int((~torch.isfinite(output)).sum()), flush=True)
+                self.optimizer.zero_grad(set_to_none=True)
+                return {'loss': float('nan')}
             # del data
             l = self.loss(output, target, data, b0_dir=b0_dirs)
 
+        if not torch.isfinite(l).item():
+            print(f"[WARN] Non-finite TOTAL loss: {float(l)} — skipping backward/step", flush=True)
+            self.optimizer.zero_grad(set_to_none=True)
+            return {'loss': float('nan')}
 
         if self.grad_scaler is not None:
             self.grad_scaler.scale(l).backward()
