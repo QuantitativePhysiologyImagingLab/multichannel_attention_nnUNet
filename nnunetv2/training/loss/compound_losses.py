@@ -92,32 +92,32 @@ class VeinPhysics_Frangi_DC_and_CE_loss(nn.Module):
         """
         
         # --- DEBUG: only print first few times ---
-        if not hasattr(self, "_dbg_count"):
-            self._dbg_count = 0
-        if self._dbg_count < 5:
-            print("=== VeinPhysics_Frangi_DC_and_CE DEBUG ===", flush=True)
-            print("net_output:", net_output.shape, net_output.dtype,
-                  "requires_grad=", net_output.requires_grad, flush=True)
-            print("target    :", target.shape, target.dtype,
-                  "unique labels=", target.unique().tolist()[:10], flush=True)
-            print("data      :", data.shape, data.dtype, flush=True)
+        # if not hasattr(self, "_dbg_count"):
+        #     self._dbg_count = 0
+        # if self._dbg_count < 5:
+        #     print("=== VeinPhysics_Frangi_DC_and_CE DEBUG ===", flush=True)
+        #     print("net_output:", net_output.shape, net_output.dtype,
+        #           "requires_grad=", net_output.requires_grad, flush=True)
+        #     print("target    :", target.shape, target.dtype,
+        #           "unique labels=", target.unique().tolist()[:10], flush=True)
+        #     print("data      :", data.shape, data.dtype, flush=True)
 
-            # if data is [chi, B_meas, V_I, ...]
-            chi = data[:, 0:1]
-            Bm  = data[:, 1:2]
-            VI  = data[:, 2:3] if data.shape[1] > 2 else None
-            print("  chi   min/max/mean:",
-                  float(chi.min()), float(chi.max()), float(chi.mean()), flush=True)
-            print("  B_meas min/max/mean:",
-                  float(Bm.min()), float(Bm.max()), float(Bm.mean()), flush=True)
-            if VI is not None:
-                print("  V_I   min/max/mean:",
-                      float(VI.min()), float(VI.max()), float(VI.mean()), flush=True)
+        #     # if data is [chi, B_meas, V_I, ...]
+        #     chi = data[:, 0:1]
+        #     Bm  = data[:, 1:2]
+        #     VI  = data[:, 2:3] if data.shape[1] > 2 else None
+        #     print("  chi   min/max/mean:",
+        #           float(chi.min()), float(chi.max()), float(chi.mean()), flush=True)
+        #     print("  B_meas min/max/mean:",
+        #           float(Bm.min()), float(Bm.max()), float(Bm.mean()), flush=True)
+        #     if VI is not None:
+        #         print("  V_I   min/max/mean:",
+        #               float(VI.min()), float(VI.max()), float(VI.mean()), flush=True)
 
-            if b0_dir is not None:
-                print("b0_dir:", b0_dir.shape, b0_dir, flush=True)
+        #     if b0_dir is not None:
+        #         print("b0_dir:", b0_dir.shape, b0_dir, flush=True)
 
-            self._dbg_count += 1
+        #     self._dbg_count += 1
         
         # ---- ignore-label handling for Dice/CE ----
         if self.ignore_label is not None:
@@ -156,11 +156,11 @@ class VeinPhysics_Frangi_DC_and_CE_loss(nn.Module):
             )
             total = total + self.weight_physics*phys_loss
 
-            if self._dbg_count < 5:
-                print("TOTAL loss:",
-                      float(total.detach()),
-                      "requires_grad=", total.requires_grad,
-                      flush=True)
+            # if self._dbg_count < 5:
+            #     print("TOTAL loss:",
+            #           float(total.detach()),
+            #           "requires_grad=", total.requires_grad,
+            #           flush=True)
 
         # ---- Frangi term ----
         if self.frangi is not None and self.weight_frangi != 0:
@@ -169,21 +169,21 @@ class VeinPhysics_Frangi_DC_and_CE_loss(nn.Module):
                 net_output=net_output,
                 data=data
             )
-            if self._dbg_count < 5:
-                print(
-                    "FRANGI DEBUG:",
-                    "value=", float(frangi_loss),
-                    "requires_grad=", frangi_loss.requires_grad,
-                    "grad_fn=", frangi_loss.grad_fn,
-                    flush=True
-                )
+            # if self._dbg_count < 5:
+            #     print(
+            #         "FRANGI DEBUG:",
+            #         "value=", float(frangi_loss),
+            #         "requires_grad=", frangi_loss.requires_grad,
+            #         "grad_fn=", frangi_loss.grad_fn,
+            #         flush=True
+            #     )
             total = total + self.weight_frangi * frangi_loss
 
-            if self._dbg_count < 5:
-                print("TOTAL loss:",
-                      float(total.detach()),
-                      "requires_grad=", total.requires_grad,
-                      flush=True)
+            # if self._dbg_count < 5:
+            #     print("TOTAL loss:",
+            #           float(total.detach()),
+            #           "requires_grad=", total.requires_grad,
+            #           flush=True)
                     
         # print("CE loss: ", ce_loss)
         print("DC loss: ", dc_loss)
