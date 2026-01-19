@@ -409,4 +409,12 @@ class FrangiLoss(nn.Module):
 
         # Weights (tune as needed)
         loss = (5*loss_selfV + 10*loss_hinge + 10*loss_bg)
+
+        # last-resort stabilization
+        if not torch.isfinite(loss):
+            # log once or a few times if you want
+            print("[WARN] FrangiLoss produced non-finite value: "
+                  f"selfV={float(loss_selfV)}, hinge={float(loss_hinge)}, bg={float(loss_bg)}")
+            loss = torch.nan_to_num(loss, nan=0.0, posinf=0.0, neginf=0.0)
+            
         return loss
