@@ -156,6 +156,12 @@ class VeinPhysics_Frangi_DC_and_CE_loss(nn.Module):
             )
             total = total + self.weight_physics*phys_loss
 
+            if self._dbg_count < 5:
+                print("TOTAL loss:",
+                      float(total.detach()),
+                      "requires_grad=", total.requires_grad,
+                      flush=True)
+
         # ---- Frangi term ----
         if self.frangi is not None and self.weight_frangi != 0:
             with autocast(enabled=False):    
@@ -163,14 +169,21 @@ class VeinPhysics_Frangi_DC_and_CE_loss(nn.Module):
                     net_output=net_output,
                     data=data
                 )
-            print(
-                "FRANGI DEBUG:",
-                "value=", float(frangi_loss),
-                "requires_grad=", frangi_loss.requires_grad,
-                "grad_fn=", frangi_loss.grad_fn,
-                flush=True
-            )
+            if self._dbg_count < 5:
+                print(
+                    "FRANGI DEBUG:",
+                    "value=", float(frangi_loss),
+                    "requires_grad=", frangi_loss.requires_grad,
+                    "grad_fn=", frangi_loss.grad_fn,
+                    flush=True
+                )
             total = total + self.weight_frangi * frangi_loss
+
+            if self._dbg_count < 5:
+                print("TOTAL loss:",
+                      float(total.detach()),
+                      "requires_grad=", total.requires_grad,
+                      flush=True)
                     
         # print("CE loss: ", ce_loss)
         print("DC loss: ", dc_loss)
