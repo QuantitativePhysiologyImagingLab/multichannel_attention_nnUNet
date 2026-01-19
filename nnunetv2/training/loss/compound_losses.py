@@ -133,6 +133,12 @@ class VeinPhysics_Frangi_DC_and_CE_loss(nn.Module):
                 net_output=net_output,
                 data=data
             )
+            print(
+                "FRANGI DEBUG:",
+                "value=", float(frangi_loss),
+                "requires_grad=", frangi_loss.requires_grad,
+                "grad_fn=", frangi_loss.grad_fn
+            )
             total = total + self.weight_frangi * frangi_loss
                     
         # print("CE loss: ", ce_loss)
