@@ -1133,13 +1133,33 @@ class nnUNetTrainerPhysicsWithAttentionUnsupervised(nnUNetTrainer):
             f"Current learning rate: {np.round(self.optimizer.param_groups[0]['lr'], decimals=5)}")
         # lrs are the same for all workers so we don't need to gather them in case of DDP training
         self.logger.log('lrs', self.optimizer.param_groups[0]['lr'], self.current_epoch)
-
+    
     def train_step(self, batch: dict) -> dict:
         data = batch['data']
         target = batch['target']
         phase = data[:, 1:2, ...]
         keys  = batch['keys']       # list of case identifiers length B
 
+        def _check_finite_out(out):
+            if isinstance(out, (list, tuple)):
+                for j, o in enumerate(out):
+                    if not torch.isfinite(o).all():
+                        print(f"[FATAL] net_output[{j}] has non-finite values", flush=True)
+                        print("  min:", float(torch.nanmin(o)),
+                            "max:", float(torch.nanmax(o)),
+                            "non-finite count:", int((~torch.isfinite(o)).sum()),
+                            flush=True)
+                        return False
+                return True
+            else:
+                if not torch.isfinite(out).all():
+                    print("[FATAL] net_output has non-finite values", flush=True)
+                    print("  min:", float(torch.nanmin(out)),
+                        "max:", float(torch.nanmax(out)),
+                        "non-finite count:", int((~torch.isfinite(out)).sum()),
+                        flush=True)
+                    return False
+                return True
 
         # build (B,3) tensor of B0 directions in voxel coords
         b0_dirs = torch.stack([self._get_case_B0(k) for k in keys], dim=0).to(self.device)
@@ -1157,7 +1177,7 @@ class nnUNetTrainerPhysicsWithAttentionUnsupervised(nnUNetTrainer):
         # So autocast will only be active if we have a cuda device.
         with autocast(self.device.type, enabled=True) if self.device.type == 'cuda' else dummy_context():
             output = self.network(data)
-            if not torch.isfinite(output).all():
+            if not _check_finite_out(output):
                 print("[FATAL] net_output has non-finite values", flush=True)
                 print("  min:", float(torch.nanmin(output)),
                     "max:", float(torch.nanmax(output)),
