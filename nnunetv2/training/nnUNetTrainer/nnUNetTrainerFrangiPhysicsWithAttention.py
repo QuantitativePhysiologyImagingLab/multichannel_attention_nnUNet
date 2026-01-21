@@ -215,7 +215,7 @@ class EnsureB0Shape(BasicTransform):
             data_dict['b0_dir'] = b0
         return data_dict
 
-class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
+class nnUNetTrainerPhysicsWithAttentionUnsupervised(nnUNetTrainer):
     def __init__(self, plans: dict, configuration: str, fold: int, dataset_json: dict,
                  device: torch.device = torch.device('cuda')):
         # From https://grugbrain.dev/. Worth a read ya big brains ;-)
@@ -296,7 +296,7 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
         self.probabilistic_oversampling = False
         self.num_iterations_per_epoch = 250
         self.num_val_iterations_per_epoch = 50
-        self.num_epochs = 50
+        self.num_epochs = 100
         self.current_epoch = 0
         self.enable_deep_supervision = True
 
@@ -318,6 +318,7 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
         # logging
         timestamp = datetime.now()
         maybe_mkdir_p(self.output_folder)
+        print(self.output_folder)
         self.log_file = join(self.output_folder, "training_log_%d_%d_%d_%02.0d_%02.0d_%02.0d.txt" %
                              (timestamp.year, timestamp.month, timestamp.day, timestamp.hour, timestamp.minute,
                               timestamp.second))
@@ -609,6 +610,11 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
                             'do_bg': True, 'smooth': 1e-5, 'ddp': self.is_ddp},
                             {},
                             {},
+                            weight_ce=1, 
+                            weight_dice=0.5, 
+                            weight_tversky=1, 
+                            weight_physics=20, 
+                            weight_frangi=1,
                             ignore_label=self.label_manager.ignore_label,
                             dice_class=MemoryEfficientSoftDiceLoss)
 
@@ -1128,46 +1134,112 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
             f"Current learning rate: {np.round(self.optimizer.param_groups[0]['lr'], decimals=5)}")
         # lrs are the same for all workers so we don't need to gather them in case of DDP training
         self.logger.log('lrs', self.optimizer.param_groups[0]['lr'], self.current_epoch)
-
+    
     def train_step(self, batch: dict) -> dict:
         data = batch['data']
         target = batch['target']
-        phase = data[:, 1:2, ...]
         keys  = batch['keys']       # list of case identifiers length B
-
-
+    
         # build (B,3) tensor of B0 directions in voxel coords
         b0_dirs = torch.stack([self._get_case_B0(k) for k in keys], dim=0).to(self.device)
-
+    
         data = data.to(self.device, non_blocking=True)
         if isinstance(target, list):
             target = [i.to(self.device, non_blocking=True) for i in target]
         else:
             target = target.to(self.device, non_blocking=True)
-
+    
         self.optimizer.zero_grad(set_to_none=True)
-        # Autocast can be annoying
-        # If the device_type is 'cpu' then it's slow as heck and needs to be disabled.
-        # If the device_type is 'mps' then it will complain that mps is not implemented, even if enabled=False is set. Whyyyyyyy. (this is why we don't make use of enabled=False)
-        # So autocast will only be active if we have a cuda device.
-        with autocast(self.device.type, enabled=True) if self.device.type == 'cuda' else dummy_context():
-            output = self.network(data)
-            # del data
-            l = self.loss(output, target, data, b0_dir=b0_dirs)
-
-
+    
+        # ---------- forward + sanitize + loss all in one autocast ----------
+        use_amp = (self.device.type == 'cuda')
+        with autocast(self.device.type, enabled=use_amp):
+            net_out = self.network(data)
+    
+            # Make a list of heads, even if there's only one
+            if isinstance(net_out, (list, tuple)):
+                outputs = list(net_out)
+            else:
+                outputs = [net_out]
+    
+            safe_outputs = []
+            for i, o in enumerate(outputs):
+                # sanitize
+                o = torch.nan_to_num(o, nan=0.0, posinf=0.0, neginf=0.0)
+                # clamp logits – prevents crazy softmax / CE behaviour
+                o = o.clamp(min=-20.0, max=20.0)
+    
+                if not torch.isfinite(o).all():
+                    print(
+                        f"[FATAL] net_output[{i}] has non-finite values even after clamp, skipping batch",
+                        flush=True
+                    )
+                    # IMPORTANT: return numpy NaN, not Python float
+                    return {'loss': np.array(np.nan, dtype=np.float32)}
+    
+                safe_outputs.append(o)
+    
+            # reconstruct same structure for the loss
+            if isinstance(net_out, (list, tuple)):
+                net_out = safe_outputs
+            else:
+                net_out = safe_outputs[0]
+    
+            # compute loss
+            l = self.loss(net_out, target, data, b0_dir=b0_dirs)
+    
+        # ---------- loss sanity check (BEFORE backward) ----------
+        l_det = l.detach()
+        if not torch.isfinite(l_det).all():
+            print(f"[WARN] total loss non-finite: {float(l_det)}; skipping batch", flush=True)
+            self.optimizer.zero_grad(set_to_none=True)
+            return {'loss': np.array(np.nan, dtype=np.float32)}
+    
+        # ---------- backward ----------
         if self.grad_scaler is not None:
             self.grad_scaler.scale(l).backward()
             self.grad_scaler.unscale_(self.optimizer)
-            torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)
+    
+            bad_params = []
+            for name, p in self.network.named_parameters():
+                if p.grad is None:
+                    continue
+                if not torch.isfinite(p.grad).all():
+                    gmin = float(torch.nan_to_num(p.grad).min())
+                    gmax = float(torch.nan_to_num(p.grad).max())
+                    # print(f"[BAD GRAD] {name}: finite?={torch.isfinite(p.grad).all().item()} "
+                    #       f"min={gmin} max={gmax}", flush=True)
+                    bad_params.append(name)
+    
+            if bad_params:
+                print("[WARN] Non-finite grads in:", bad_params, flush=True)
+                self.optimizer.zero_grad(set_to_none=True)
+                self.grad_scaler.update()
+                return {'loss': np.array(np.nan, dtype=np.float32)}
+    
+            grad_norm = torch.nn.utils.clip_grad_norm_(self.network.parameters(), 5.0)
+            grad_norm_t = torch.tensor(float(grad_norm), device=self.device)
+    
+            if not torch.isfinite(grad_norm_t):
+                print(f"[WARN] non-finite grad norm: {grad_norm}, skipping optimizer step", flush=True)
+                self.optimizer.zero_grad(set_to_none=True)
+                self.grad_scaler.update()
+                return {'loss': np.array(np.nan, dtype=np.float32)}
+    
             self.grad_scaler.step(self.optimizer)
             self.grad_scaler.update()
         else:
             l.backward()
-            torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)
+            grad_norm = torch.nn.utils.clip_grad_norm_(self.network.parameters(), 5.0)
+            grad_norm_t = torch.tensor(float(grad_norm), device=self.device)
+            if not torch.isfinite(grad_norm_t):
+                print(f"[WARN] non-finite grad norm (no AMP): {grad_norm}, skipping optimizer step", flush=True)
+                self.optimizer.zero_grad(set_to_none=True)
+                return {'loss': np.array(np.nan, dtype=np.float32)}
             self.optimizer.step()
-        return {'loss': l.detach().cpu().numpy()}
-
+    
+        # nnUNet’s collate_outputs expects something indexable; numpy scalar is fine
+        return {'loss': l_det.cpu().numpy()}
     def on_train_epoch_end(self, train_outputs: List[dict]):
         outputs = collate_outputs(train_outputs)
 
