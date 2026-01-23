@@ -610,10 +610,10 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
                             'do_bg': True, 'smooth': 1e-5, 'ddp': self.is_ddp},
                             {},
                             {},
-                            weight_ce=2, 
+                            weight_ce=1, 
                             weight_dice=0.5, 
                             weight_tversky=1, 
-                            weight_physics=30, 
+                            weight_physics=20, 
                             weight_frangi=1,
                             ignore_label=self.label_manager.ignore_label,
                             dice_class=MemoryEfficientSoftDiceLoss)
