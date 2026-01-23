@@ -296,7 +296,7 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
         self.probabilistic_oversampling = False
         self.num_iterations_per_epoch = 250
         self.num_val_iterations_per_epoch = 50
-        self.num_epochs = 500
+        self.num_epochs = 100
         self.current_epoch = 0
         self.enable_deep_supervision = True
 
@@ -614,7 +614,7 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
                             weight_dice=0.5, 
                             weight_tversky=1, 
                             weight_physics=30, 
-                            weight_frangi=0,
+                            weight_frangi=0.2,
                             ignore_label=self.label_manager.ignore_label,
                             dice_class=MemoryEfficientSoftDiceLoss)
 
@@ -1157,85 +1157,85 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
             net_out = self.network(data)
     
             # Make a list of heads, even if there's only one
-            if isinstance(net_out, (list, tuple)):
-                outputs = list(net_out)
-            else:
-                outputs = [net_out]
+            # if isinstance(net_out, (list, tuple)):
+            #     outputs = list(net_out)
+            # else:
+            #     outputs = [net_out]
     
-            safe_outputs = []
-            for i, o in enumerate(outputs):
-                # sanitize
-                o = torch.nan_to_num(o, nan=0.0, posinf=0.0, neginf=0.0)
-                # clamp logits – prevents crazy softmax / CE behaviour
-                o = o.clamp(min=-20.0, max=20.0)
+            # safe_outputs = []
+            # for i, o in enumerate(outputs):
+            #     # sanitize
+            #     o = torch.nan_to_num(o, nan=0.0, posinf=0.0, neginf=0.0)
+            #     # clamp logits – prevents crazy softmax / CE behaviour
+            #     o = o.clamp(min=-20.0, max=20.0)
     
-                if not torch.isfinite(o).all():
-                    print(
-                        f"[FATAL] net_output[{i}] has non-finite values even after clamp, skipping batch",
-                        flush=True
-                    )
-                    # IMPORTANT: return numpy NaN, not Python float
-                    return {'loss': np.array(np.nan, dtype=np.float32)}
+            #     if not torch.isfinite(o).all():
+            #         print(
+            #             f"[FATAL] net_output[{i}] has non-finite values even after clamp, skipping batch",
+            #             flush=True
+            #         )
+            #         # IMPORTANT: return numpy NaN, not Python float
+            #         return {'loss': np.array(np.nan, dtype=np.float32)}
     
-                safe_outputs.append(o)
+            #     safe_outputs.append(o)
     
-            # reconstruct same structure for the loss
-            if isinstance(net_out, (list, tuple)):
-                net_out = safe_outputs
-            else:
-                net_out = safe_outputs[0]
+            # # reconstruct same structure for the loss
+            # if isinstance(net_out, (list, tuple)):
+            #     net_out = safe_outputs
+            # else:
+            #     net_out = safe_outputs[0]
     
             # compute loss
             l = self.loss(net_out, target, data, b0_dir=b0_dirs)
     
         # ---------- loss sanity check (BEFORE backward) ----------
-        l_det = l.detach()
-        if not torch.isfinite(l_det).all():
-            print(f"[WARN] total loss non-finite: {float(l_det)}; skipping batch", flush=True)
-            self.optimizer.zero_grad(set_to_none=True)
-            return {'loss': np.array(np.nan, dtype=np.float32)}
+        # l_det = l.detach()
+        # if not torch.isfinite(l_det).all():
+        #     print(f"[WARN] total loss non-finite: {float(l_det)}; skipping batch", flush=True)
+        #     self.optimizer.zero_grad(set_to_none=True)
+        #     return {'loss': np.array(np.nan, dtype=np.float32)}
     
         # ---------- backward ----------
         if self.grad_scaler is not None:
             self.grad_scaler.scale(l).backward()
             self.grad_scaler.unscale_(self.optimizer)
     
-            bad_params = []
-            for name, p in self.network.named_parameters():
-                if p.grad is None:
-                    continue
-                if not torch.isfinite(p.grad).all():
-                    gmin = float(torch.nan_to_num(p.grad).min())
-                    gmax = float(torch.nan_to_num(p.grad).max())
-                    # print(f"[BAD GRAD] {name}: finite?={torch.isfinite(p.grad).all().item()} "
-                    #       f"min={gmin} max={gmax}", flush=True)
-                    bad_params.append(name)
+            # bad_params = []
+            # for name, p in self.network.named_parameters():
+            #     if p.grad is None:
+            #         continue
+            #     if not torch.isfinite(p.grad).all():
+            #         gmin = float(torch.nan_to_num(p.grad).min())
+            #         gmax = float(torch.nan_to_num(p.grad).max())
+            #         # print(f"[BAD GRAD] {name}: finite?={torch.isfinite(p.grad).all().item()} "
+            #         #       f"min={gmin} max={gmax}", flush=True)
+            #         bad_params.append(name)
     
-            if bad_params:
-                print("[WARN] Non-finite grads in:", bad_params, flush=True)
-                self.optimizer.zero_grad(set_to_none=True)
-                self.grad_scaler.update()
-                return {'loss': np.array(np.nan, dtype=np.float32)}
+            # if bad_params:
+            #     print("[WARN] Non-finite grads in:", bad_params, flush=True)
+                # self.optimizer.zero_grad(set_to_none=True)
+                # self.grad_scaler.update()
+                # return {'loss': np.array(np.nan, dtype=np.float32)}
     
-            grad_norm = torch.nn.utils.clip_grad_norm_(self.network.parameters(), 5.0)
-            grad_norm_t = torch.tensor(float(grad_norm), device=self.device)
+            grad_norm = torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12.0)
+            # grad_norm_t = torch.tensor(float(grad_norm), device=self.device)
     
-            if not torch.isfinite(grad_norm_t):
-                print(f"[WARN] non-finite grad norm: {grad_norm}, skipping optimizer step", flush=True)
-                self.optimizer.zero_grad(set_to_none=True)
-                self.grad_scaler.update()
-                return {'loss': np.array(np.nan, dtype=np.float32)}
+            # if not torch.isfinite(grad_norm_t):
+            #     print(f"[WARN] non-finite grad norm: {grad_norm}, skipping optimizer step", flush=True)
+            #     self.optimizer.zero_grad(set_to_none=True)
+            #     self.grad_scaler.update()
+            #     return {'loss': np.array(np.nan, dtype=np.float32)}
     
             self.grad_scaler.step(self.optimizer)
             self.grad_scaler.update()
         else:
             l.backward()
-            grad_norm = torch.nn.utils.clip_grad_norm_(self.network.parameters(), 5.0)
+            grad_norm = torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12.0)
             grad_norm_t = torch.tensor(float(grad_norm), device=self.device)
             if not torch.isfinite(grad_norm_t):
                 print(f"[WARN] non-finite grad norm (no AMP): {grad_norm}, skipping optimizer step", flush=True)
-                self.optimizer.zero_grad(set_to_none=True)
-                return {'loss': np.array(np.nan, dtype=np.float32)}
+                # self.optimizer.zero_grad(set_to_none=True)
+                # return {'loss': np.array(np.nan, dtype=np.float32)}
             self.optimizer.step()
     
         # nnUNet’s collate_outputs expects something indexable; numpy scalar is fine
