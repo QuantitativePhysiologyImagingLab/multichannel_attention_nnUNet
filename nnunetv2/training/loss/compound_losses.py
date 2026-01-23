@@ -193,11 +193,11 @@ class VeinPhysics_Frangi_DC_and_CE_loss(nn.Module):
             #           "requires_grad=", total.requires_grad,
             #           flush=True)
                     
-        print("CE loss: ", ce_loss)
-        print("DC loss: ", dc_loss)
-        print("Phys loss: ", phys_loss)
-        print("Tversky: ", tversky_loss)
-        print("Frangi: ", frangi_loss)
+        # print("CE loss: ", ce_loss)
+        # print("DC loss: ", dc_loss)
+        # print("Phys loss: ", phys_loss)
+        # print("Tversky: ", tversky_loss)
+        # print("Frangi: ", frangi_loss)
 
         return total
 
