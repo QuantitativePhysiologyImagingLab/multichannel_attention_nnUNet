@@ -1239,7 +1239,8 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
             self.optimizer.step()
     
         # nnUNet’s collate_outputs expects something indexable; numpy scalar is fine
-        return {'loss': l_det.cpu().numpy()}
+        return {'loss': l.detach().cpu().numpy()}
+    
     def on_train_epoch_end(self, train_outputs: List[dict]):
         outputs = collate_outputs(train_outputs)
 
