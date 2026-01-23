@@ -352,6 +352,7 @@ class FrangiLoss(nn.Module):
         probs = torch.softmax(net_output32, dim=1)
         vein_p = probs[:, self.vein_channel:self.vein_channel+1]  # (B,1,*,*,*)
         vein_p = vein_p.clamp(0.0, 1.0)
+        vein_eval = (vein_p >= 0.5).to(net_output.dtype)
 
         alpha, tau = self.alpha_tau
 
@@ -366,7 +367,7 @@ class FrangiLoss(nn.Module):
         with torch.no_grad():
             # smooth prob
             P_blur = F.avg_pool3d(
-                F.pad(vein_p, (1,1,1,1,1,1), mode='reflect'),
+                F.pad(vein_eval, (1,1,1,1,1,1), mode='reflect'),
                 kernel_size=3, stride=1
             )
             V_P_prior, _ = frangi_3d(
@@ -379,6 +380,8 @@ class FrangiLoss(nn.Module):
                 return_scale=False
             )
             V_P_prior = V_P_prior.clamp(0.0, 1.0)
+            V_P_prior = V_P_prior * 10000
+
 
         # ---- now ALL grads come from simple comparisons: vein_p → loss ----
         margin = 0.1
@@ -391,26 +394,27 @@ class FrangiLoss(nn.Module):
             target_tube = (V_P_prior * V_gate).detach()
 
             # 1) selfV: encourage vein_p ≈ target_tube inside gate
-            eps = 1e-6
-            pt = vein_p[vmask].clamp(eps, 1-eps)
-            tt = target_tube[vmask].clamp(eps, 1-eps)
-            loss_selfV = (tt * (tt/pt).log() + (1-tt) * ((1-tt)/(1-pt)).log()).mean()
+            # eps = 1e-6
+            # pt = vein_eval[vmask].clamp(eps, 1-eps)
+            # tt = target_tube[vmask].clamp(eps, 1-eps)
+            loss_selfV = -(target_tube[vmask]).mean()
 
             # 2) completion hinge: want vein_p >= V_I + margin inside gate
-            desired = (V_I + margin).clamp(0.0, 1.0)
-            hinge_term = F.softplus(desired - vein_p, beta=10.0)
-            loss_hinge = (hinge_term * V_gate)[vmask].mean()
+            # desired = (V_I + margin).clamp(0.0, 1.0)
+            # hinge_term = F.softplus(desired - vein_eval, beta=10.0)
+            loss_hinge = ((torch.relu((V_I + margin) - V_P_prior) * V_gate)[vmask]).mean()
+
         else:
-            loss_selfV = vein_p.new_zeros(())
-            loss_hinge = vein_p.new_zeros(())
+            loss_selfV = vein_eval.new_zeros(())
+            loss_hinge = vein_eval.new_zeros(())
 
         # 3) background suppression: penalize vein prob where image is confidently non-tubular
         non_vessel = (V_I < 0.05).float()
         # denom = non_vessel.sum().clamp_min(1.0)
-        loss_bg = torch.mean(torch.square(vein_p * non_vessel))
+        loss_bg = torch.mean(torch.square(vein_eval * non_vessel))
 
         # ---- combine, clamp → fp16-safe ----
-        loss = 5.0 * loss_selfV + 10.0 * loss_hinge + 10.0 * loss_bg
+        loss = 5.0 * loss_selfV + 5.0 * loss_hinge + 20.0 * loss_bg
 
         # snapshot originals for logging
         selfV_raw  = loss_selfV
