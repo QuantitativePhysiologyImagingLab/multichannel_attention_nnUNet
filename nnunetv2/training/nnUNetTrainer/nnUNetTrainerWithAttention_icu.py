@@ -8,7 +8,17 @@ from nnunetv2.training.network_architecture.unet_with_attention import UNetWithA
 class UNetWithAttentionInfer(_BaseUNetWithAttention):
     def forward(self, x):
         y = super().forward(x)
-        return y[0] if isinstance(y, (list, tuple)) else y
+
+        use_ds = bool(
+            getattr(self, "do_ds", False)
+            or getattr(self, "deep_supervision", False)
+            or getattr(self, "enable_deep_supervision", False)
+        )
+
+        if isinstance(y, (list, tuple)):
+            return y if use_ds else y[0]
+        else:
+            return [y] if use_ds else y
 
 class nnUNetTrainerWithAttention_icu(nnUNetTrainer):
     @staticmethod
