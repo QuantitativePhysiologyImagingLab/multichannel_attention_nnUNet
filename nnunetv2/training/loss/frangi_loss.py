@@ -361,17 +361,17 @@ class FrangiLoss(nn.Module):
             V_gate = torch.sigmoid(alpha * (V_I - tau))
             V_gate = F.max_pool3d(V_gate, kernel_size=3, stride=1, padding=1)
 
-        valid = (V_gate > 0.5) & (brain_mask > 0)
+        valid = (V_gate > 0.51) & (brain_mask > 0)
 
         # ---- Frangi on prediction: NO grad through Frangi ----
         with torch.no_grad():
             # smooth prob
-            P_blur = F.avg_pool3d(
-                F.pad(vein_eval, (1,1,1,1,1,1), mode='reflect'),
-                kernel_size=3, stride=1
-            )
+            # P_blur = F.avg_pool3d(
+            #     F.pad(vein_eval, (1,1,1,1,1,1), mode='reflect'),
+            #     kernel_size=3, stride=1
+            # )
             V_P_prior, _ = frangi_3d(
-                P_blur,
+                vein_eval,
                 sigmas=self.sig_mask,
                 alpha=0.8,
                 beta=0.8,
@@ -379,15 +379,16 @@ class FrangiLoss(nn.Module):
                 bright_vessels=True,
                 return_scale=False
             )
-            V_P_prior = V_P_prior.clamp(0.0, 1.0)
-            V_P_prior = V_P_prior * 10000
+            # V_P_prior = V_P_prior.clamp(0.0, 1.0)
+            V_P_prior = V_P_prior * 100
 
 
         # ---- now ALL grads come from simple comparisons: vein_p → loss ----
         margin = 0.1
 
         if valid.any():
-            vmask = valid
+            inner_vein_mask = (V_P_prior == 0) & vein_eval.bool()
+            vmask = valid & ~inner_vein_mask
 
             # encourage high vein prob where Frangi(P) & Frangi(QSM) agree
             # (V_P_prior and V_gate are treated as fixed priors)
@@ -409,17 +410,17 @@ class FrangiLoss(nn.Module):
             loss_hinge = vein_eval.new_zeros(())
 
         # 3) background suppression: penalize vein prob where image is confidently non-tubular
-        non_vessel = (V_I < 0.05).float()
-        # denom = non_vessel.sum().clamp_min(1.0)
-        loss_bg = torch.mean(torch.square(vein_eval * non_vessel))
+        # non_vessel = (V_I < 0.05).float()
+        # # denom = non_vessel.sum().clamp_min(1.0)
+        # loss_bg = torch.mean(torch.square(vein_eval * non_vessel))
 
         # ---- combine, clamp → fp16-safe ----
-        loss = 5.0 * loss_selfV + 5.0 * loss_hinge + 20.0 * loss_bg
+        loss = 10.0 * loss_selfV + 5.0 * loss_hinge
 
         # snapshot originals for logging
         selfV_raw  = loss_selfV
         hinge_raw  = loss_hinge
-        bg_raw     = loss_bg
+        # bg_raw     = loss_bg
 
         # sanitize in-place
         if not torch.isfinite(loss_selfV).item():
@@ -434,10 +435,10 @@ class FrangiLoss(nn.Module):
                 flush=True)
             # loss_hinge = torch.nan_to_num(loss_hinge, nan=0.0, posinf=0.0, neginf=0.0)
 
-        if not torch.isfinite(loss_bg).item():
-            print("[WARN] FrangiLoss non-finite bg: "
-                f"selfV={float(selfV_raw)}, hinge={float(hinge_raw)}, bg={float(bg_raw)}",
-                flush=True)
+        # if not torch.isfinite(loss_bg).item():
+        #     print("[WARN] FrangiLoss non-finite bg: "
+        #         f"selfV={float(selfV_raw)}, hinge={float(hinge_raw)}, bg={float(bg_raw)}",
+        #         flush=True)
             # loss_bg = torch.nan_to_num(loss_bg, nan=0.0, posinf=0.0, neginf=0.0)
 
         # return in same dtype as net_output for AMP / GradScaler
