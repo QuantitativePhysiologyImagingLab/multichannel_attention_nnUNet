@@ -340,7 +340,7 @@ class FrangiLoss(nn.Module):
         # ---- cast everything to fp32 inside, return in original dtype ----
         net_output32 = net_output.float()
         chi_qsm = data[:, 0:1].to(device=device, dtype=torch.float32)
-        V_I     = data[:, 2:3].to(device=device, dtype=torch.float32)
+        V_I     = data[:, -1:].to(device=device, dtype=torch.float32)
 
         brain_mask = (chi_qsm != 0).to(torch.float32)
 
