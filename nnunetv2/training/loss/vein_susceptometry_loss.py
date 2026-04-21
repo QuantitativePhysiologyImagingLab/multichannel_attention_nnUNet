@@ -108,6 +108,7 @@ class PhysicsFieldLoss(nn.Module):
 
     def forward(self, net_output, data,
                 b0_dir,
+                target=None,
                 brain_mask=None, vein_eval=None,
                 chi_blood_ppm=None):
         """
@@ -138,15 +139,29 @@ class PhysicsFieldLoss(nn.Module):
         B_meas     = self._resize_like(B_meas,     net_output, is_mask=False)
         brain_mask = self._resize_like(brain_mask, net_output, is_mask=True)
 
-        # chi_blood (ppm)
-        if chi_blood_ppm is None:
-            # self._chi_blood can be a float or a tensor — normalize to a tensor on the right device/dtype
+        # chi_blood (ppm): derive from GT vein mask if target is provided, else fall back
+        if chi_blood_ppm is not None:
+            chi_b = torch.tensor(chi_blood_ppm, device=net_output.device, dtype=net_output.dtype)
+        elif target is not None:
+            # target[:, 0] holds integer class labels; vein_channel label == self.vein_channel
+            gt_vein_mask = (target[:, 0:1] == self.vein_channel).to(device=net_output.device)
+            gt_vein_mask = self._resize_like(gt_vein_mask.float(), chi_qsm, is_mask=True)
+            gt_vein_bool = (gt_vein_mask > 0) & (brain_mask > 0)
+            if gt_vein_bool.any():
+                vein_vals = chi_qsm[gt_vein_bool]                   # (N,)
+                p20       = torch.quantile(vein_vals, 0.20)
+                top80     = vein_vals[vein_vals >= p20]
+                chi_b     = top80.mean()
+                # if self.debug:
+                print(f"[PHYSICS] chi_b={float(chi_b):.4f} ppm "
+                        f"(top-80% of {gt_vein_bool.sum().item()} GT vein voxels)", flush=True)
+            else:
+                chi_b = torch.tensor(float(self._chi_blood), device=net_output.device, dtype=net_output.dtype)
+        else:
             if isinstance(self._chi_blood, torch.Tensor):
                 chi_b = self._chi_blood.to(device=net_output.device, dtype=net_output.dtype)
             else:
                 chi_b = torch.tensor(float(self._chi_blood), device=net_output.device, dtype=net_output.dtype)
-        else:
-            chi_b = torch.tensor(chi_blood_ppm, device=net_output.device, dtype=net_output.dtype)
 
         chi_b = chi_b.view(1, 1, 1, 1, 1)
 

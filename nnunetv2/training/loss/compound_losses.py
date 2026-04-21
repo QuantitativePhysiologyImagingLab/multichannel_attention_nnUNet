@@ -158,9 +158,10 @@ class VeinPhysics_Frangi_DC_and_CE_loss(nn.Module):
                     raise ValueError("b0_dir must be shape (3,) or (B,3)")
 
             phys_loss, _metrics = self.vpl(
-                net_output        = net_output,
-                data               = data,
-                b0_dir            = b0_dir
+                net_output = net_output,
+                data       = data,
+                b0_dir     = b0_dir,
+                target     = target,
             )
             total = total + self.weight_physics*phys_loss
 
@@ -270,9 +271,10 @@ class VeinPhysics_DC_and_CE_loss(nn.Module):
                     raise ValueError("b0_dir must be shape (3,) or (B,3)")
 
             phys_loss, _metrics = self.vpl(
-                net_output        = net_output,
-                data               = data,
-                b0_dir            = b0_dir
+                net_output = net_output,
+                data       = data,
+                b0_dir     = b0_dir,
+                target     = target,
             )
             total = total + self.weight_physics*phys_loss
 
