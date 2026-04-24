@@ -358,6 +358,15 @@ class FrangiLoss(nn.Module):
 
         # ---- gate from image Frangi (prior, no grad) ----
         with torch.no_grad():
+            # Normalize V_I per-subject so the gate threshold (0.51) is consistent
+            # regardless of which QSM method produced the pre-computed Frangi map.
+            # Subsample to avoid torch.quantile's 2^24-element limit on large volumes.
+            flat = V_I[brain_mask > 0].float()
+            if flat.numel() > 500_000:
+                flat = flat[torch.randperm(flat.numel(), device=flat.device)[:500_000]]
+            v99 = torch.quantile(flat, 0.99).clamp_min(1e-6)
+            V_I = (V_I / v99).clamp(0.0, 1.0)
+
             V_gate = torch.sigmoid(alpha * (V_I - tau))
             V_gate = F.max_pool3d(V_gate, kernel_size=3, stride=1, padding=1)
 
