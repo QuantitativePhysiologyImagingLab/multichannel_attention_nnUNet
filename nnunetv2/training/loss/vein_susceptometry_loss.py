@@ -38,6 +38,7 @@ class PhysicsFieldLoss(nn.Module):
                  eval_mask_mode='predicted_hard',      # or 'provided'
                  learnable_chi=False,
                  chi_blood_bounds=(0.15, 0.45),
+                 b_meas_ref=0.007,                     # mean(|B_meas|) for the reference method (TGV)
                  debug=True):
         super().__init__()
 
@@ -51,6 +52,7 @@ class PhysicsFieldLoss(nn.Module):
         self.default_voxel_size = default_voxel_size
         self.expects_b0_from_forward = expects_b0_from_forward
         self.eval_mask_mode = eval_mask_mode
+        self.b_meas_ref = float(b_meas_ref)
 
         # chi_blood as (optionally) learnable, with clamping in forward
         # self._chi_blood = nn.Parameter(torch.tensor(float(chi_blood_ppm)), requires_grad=learnable_chi)
@@ -117,7 +119,7 @@ class PhysicsFieldLoss(nn.Module):
         b0_dir:     (3,) or (B,3)
         voxel_size: (sx,sy,sz) in mm
         """
-        # Cast priors to the net’s dtype/device
+        # Cast priors to the net dtype/device
         chi_qsm = data[:, 0:1].to(device=net_output.device, dtype=net_output.dtype)   # ppm
         B_meas  = data[:, 1:2].to(device=net_output.device, dtype=net_output.dtype)   # ppm
 
@@ -148,7 +150,12 @@ class PhysicsFieldLoss(nn.Module):
             gt_vein_mask = self._resize_like(gt_vein_mask.float(), chi_qsm, is_mask=True)
             gt_vein_bool = (gt_vein_mask > 0) & (brain_mask > 0)
             if gt_vein_bool.any():
-                vein_vals = chi_qsm[gt_vein_bool].float()           # (N,) quantile requires float
+                # Clip vein vals to their own p5/p95 before estimating chi_b.
+                # This removes artifact outliers in noisy QSMs (L1/MEDI) without
+                # touching legitimate high-chi voxels in clean methods (TGV).
+                vein_vals = chi_qsm[gt_vein_bool].float()
+                p5,  p95  = torch.quantile(vein_vals, torch.tensor([0.05, 0.95], device=vein_vals.device))
+                vein_vals = vein_vals.clamp(p5, p95)
                 p20       = torch.quantile(vein_vals, 0.20)
                 top80     = vein_vals[vein_vals >= p20]
                 chi_b     = top80.mean()
@@ -220,12 +227,18 @@ class PhysicsFieldLoss(nn.Module):
             sign_hinge = torch.zeros_like(mae_masked)
             top10 = torch.zeros_like(mae_masked)
 
-        # ----- combine with scale-aware λ’s (fixed shares by default) -----
-        # If you prefer adaptive λ’s, swap this block with the EMA weighting we discussed.
+        # ----- combine with scale-aware lambdas (fixed shares by default) -----
         L = (self.lambdas['phys'] * loss_phys +
              self.lambdas['mae']  * mae_masked +
              self.lambdas['tail'] * top10 +
              self.lambdas['sign'] * sign_hinge)
+
+        # Scale DOWN when B_meas amplitude is above the TGV reference, never up.
+        # This leaves TGV-calibrated data unchanged while reducing physics loss for
+        # noisier QSM methods (MEDI/L1/STAR/iLSQR) whose larger B_meas scale would
+        # otherwise inflate the absolute residuals.
+        b_scale = B_meas[brain_mask > 0].float().abs().mean().clamp_min(1e-8).detach()
+        L = L * min(float(self.b_meas_ref / b_scale), 1.0)
         
         # ---------- DEBUG: check components & total ----------
         if self.debug:
