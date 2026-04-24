@@ -148,7 +148,7 @@ class PhysicsFieldLoss(nn.Module):
             gt_vein_mask = self._resize_like(gt_vein_mask.float(), chi_qsm, is_mask=True)
             gt_vein_bool = (gt_vein_mask > 0) & (brain_mask > 0)
             if gt_vein_bool.any():
-                vein_vals = chi_qsm[gt_vein_bool]                   # (N,)
+                vein_vals = chi_qsm[gt_vein_bool].float()           # (N,) quantile requires float
                 p20       = torch.quantile(vein_vals, 0.20)
                 top80     = vein_vals[vein_vals >= p20]
                 chi_b     = top80.mean()
