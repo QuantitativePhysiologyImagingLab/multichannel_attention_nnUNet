@@ -24,6 +24,10 @@ def load_pretrained_weights(network, fname, verbose=False):
 
     skip_strings_in_pretrained = [
         '.seg_layers.',
+        'domain_embed.',
+        'field_embed.',
+        'film_enc',
+        'film_bottle',
     ]
 
     if isinstance(network, DDP):
