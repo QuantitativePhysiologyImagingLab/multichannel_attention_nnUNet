@@ -235,38 +235,28 @@ class PhysicsFieldLoss(nn.Module):
         # noisier QSM methods (MEDI/L1/STAR/iLSQR) whose larger B_meas scale would
         # otherwise inflate the absolute residuals.
         b_scale = B_meas[brain_mask > 0].float().abs().mean().clamp_min(1e-8).detach()
-        L = L * min(float(self.b_meas_ref / b_scale), 1.0)
-        
+        scale_factor = min(float(self.b_meas_ref / b_scale), 1.0)
+        L_unscaled = L.detach()
+        L = L * scale_factor
+
         # ---------- DEBUG: check components & total ----------
         if self.debug:
-            def _stat(x):
-                return float(x), float(x.abs().max())
+            lp = float(loss_phys); lm = float(mae_masked)
+            lt = float(top10);     ls = float(sign_hinge)
+            L_val = float(L)
 
-            lp, lp_max = _stat(loss_phys)
-            lm, lm_max = _stat(mae_masked)
-            lt, lt_max = _stat(top10)
-            ls, ls_max = _stat(sign_hinge)
-            L_val, L_max = _stat(L)
+            # Always print a one-liner so we can monitor amplitude from iteration 1
+            print(
+                f"[PHYSICS] phys={lp:.5f} mae={lm:.5f} top10={lt:.5f} sign={ls:.5f} "
+                f"L_raw={float(L_unscaled):.5f} b_scale={float(b_scale):.5f} "
+                f"scale_factor={scale_factor:.3f} L_final={L_val:.5f}",
+                flush=True
+            )
 
             if (not torch.isfinite(loss_phys)) or (not torch.isfinite(mae_masked)) \
                or (not torch.isfinite(top10))   or (not torch.isfinite(sign_hinge)) \
                or (not torch.isfinite(L)):
-                print("[PHYSICS NAN] non-finite component detected:", flush=True)
-                print(f"  loss_phys={lp}, |.|_max={lp_max}", flush=True)
-                print(f"  mae_masked={lm}, |.|_max={lm_max}", flush=True)
-                print(f"  top10={lt}, |.|_max={lt_max}", flush=True)
-                print(f"  sign_hinge={ls}, |.|_max={ls_max}", flush=True)
-                print(f"  L_total={L_val}, |.|_max={L_max}", flush=True)
-            else:
-                # Optional: only log if something is huge
-                thresh = 1e2
-                if max(lp_max, lm_max, lt_max, ls_max, L_max) > thresh:
-                    print("[PHYSICS DEBUG] large physics term:", flush=True)
-                    print(f"  loss_phys={lp}, |.|_max={lp_max}", flush=True)
-                    print(f"  mae_masked={lm}, |.|_max={lm_max}", flush=True)
-                    print(f"  top10={lt}, |.|_max={lt_max}", flush=True)
-                    print(f"  sign_hinge={ls}, |.|_max={ls_max}", flush=True)
-                    print(f"  L_total={L_val}, |.|_max={L_max}", flush=True)
+                print("[PHYSICS NAN] non-finite component detected — see values above", flush=True)
         
         # print(L)
 

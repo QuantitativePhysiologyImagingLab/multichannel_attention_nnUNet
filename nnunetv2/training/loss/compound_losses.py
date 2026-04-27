@@ -53,8 +53,8 @@ class DeepSupervisionWrapperPassKwargs(nn.Module):
 
 class VeinPhysics_Frangi_DC_and_CE_loss(nn.Module):
     def __init__(self, soft_dice_kwargs, ce_kwargs, vpl_kwargs, weight_ce=2, weight_dice=2,
-                 weight_tversky=0.5, weight_physics=10, weight_frangi=0.5,
-                 weight_volume=2.0, volume_thresh=1.25,
+                 weight_tversky=0.5, weight_physics=2, weight_frangi=0.15,
+                 weight_volume=1.0, volume_thresh=1.25,
                  ignore_label=None, dice_class=SoftDiceLoss):
         """
         Weights for CE and Dice do not need to sum to one. You can set whatever you want.
@@ -182,14 +182,45 @@ class VeinPhysics_Frangi_DC_and_CE_loss(nn.Module):
             method_str = ','.join(methods)
         else:
             method_str = 'unknown'
-        phys_str   = f'{self.weight_physics * float(phys_loss):.4f}'   if 'phys_loss'   in dir() else 'n/a'
-        frangi_str = f'{self.weight_frangi  * float(frangi_loss):.4f}' if 'frangi_loss' in dir() else 'n/a'
-        vol_str    = f'{self.weight_volume  * float(vol_loss):.4f}'    if 'vol_loss'    in dir() else 'n/a'
-        print(f'[{method_str}] '
-              f'DC: {self.weight_dice * float(dc_loss):.4f}  '
-              f'Phys: {phys_str}  '
-              f'Frangi: {frangi_str}  '
-              f'Vol: {vol_str}', flush=True)
+
+        _lv = locals()
+        dc_raw = float(dc_loss)
+        wdc    = self.weight_dice * dc_raw
+
+        def _wstr(key, w):
+            if key not in _lv:
+                return 'n/a'
+            raw = float(_lv[key])
+            return f'{raw:.4f}(w={w * raw:.4f})'
+
+        phys_raw   = float(_lv['phys_loss'])   if 'phys_loss'   in _lv else None
+        frangi_raw = float(_lv['frangi_loss']) if 'frangi_loss' in _lv else None
+        vol_raw    = float(_lv['vol_loss'])    if 'vol_loss'    in _lv else None
+
+        print(
+            f'[{method_str}] '
+            f'DC: {dc_raw:.4f}(w={wdc:.4f})  '
+            f'Phys: {_wstr("phys_loss", self.weight_physics)}  '
+            f'Frangi: {_wstr("frangi_loss", self.weight_frangi)}  '
+            f'Vol: {_wstr("vol_loss", self.weight_volume)}',
+            flush=True
+        )
+
+        # Alarm: catch imbalance early so we don't waste a full run
+        if phys_raw is not None and abs(self.weight_physics * phys_raw) > abs(wdc):
+            print(
+                f'[ALARM] Physics overwhelms Dice! '
+                f'wPhys={self.weight_physics * phys_raw:.4f} vs wDC={wdc:.4f}  '
+                f'→ reduce weight_physics (currently {self.weight_physics})',
+                flush=True
+            )
+        if frangi_raw is not None and abs(self.weight_frangi * frangi_raw) > 0.5 * abs(wdc):
+            print(
+                f'[ALARM] Frangi > 50% of Dice! '
+                f'wFrangi={self.weight_frangi * frangi_raw:.4f} vs wDC={wdc:.4f}  '
+                f'→ reduce weight_frangi (currently {self.weight_frangi})',
+                flush=True
+            )
 
         return total
 
