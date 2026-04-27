@@ -5,7 +5,7 @@ import torch.nn as nn
 
 from nnunetv2.training.nnUNetTrainer.nnUNetTrainer import nnUNetTrainer
 from nnunetv2.training.network_architecture.unet_with_attention import \
-    UNetWithAttention as _BaseUNetWithAttention
+    UNetWithAttention as _BaseUNetWithAttention, vein_to_domain_idx
 
 
 # --- Prior gate ---
@@ -24,32 +24,32 @@ class PriorGate(nn.Module):
 
 # --- Base net + input prior gating (keeps original module names!) ---
 class PriorGatedUNetWithAttention(_BaseUNetWithAttention):
-    def __init__(self, in_channels, out_channels, patch_size, deep_supervision=True):
-        super().__init__(in_channels, out_channels, patch_size, deep_supervision)
+    def __init__(self, in_channels, out_channels, patch_size, deep_supervision=True,
+                 num_domains=5, domain_embed_dim=32):
+        super().__init__(in_channels, out_channels, patch_size, deep_supervision,
+                         num_domains=num_domains, domain_embed_dim=domain_embed_dim)
         n_priors = max(0, in_channels - 1)
         assert n_priors >= 1, "Expected at least one prior channel (C >= 2)."
         self.prior_gate = PriorGate(in_priors=n_priors)
 
-    def forward(self, x):
+    def forward(self, x, domain_idx=None):
         img = x[:, 0:1]
-        pri = x[:, 1:]                # <— all prior channels, 1..C-1
+        pri = x[:, 1:]                # all prior channels, 1..C-1
         A = self.prior_gate(pri)      # (B,1,*,*,*)
         x_mod = torch.cat([img * (1 + A), x[:, 1:]], dim=1)
-        return super().forward(x_mod)
+        return super().forward(x_mod, domain_idx=domain_idx)
 
 
 # --- Inference shim: return tuple in training, main tensor in eval ---
 class PriorGatedUNetWithAttentionInfer(PriorGatedUNetWithAttention):
-    def forward(self, x):
-        y = super().forward(x)
-        # Decide purely by DS flags, not by self.training
+    def forward(self, x, domain_idx=None):
+        y = super().forward(x, domain_idx=domain_idx)
         use_ds = bool(getattr(self, "do_ds", False)
                       or getattr(self, "deep_supervision", False)
                       or getattr(self, "enable_deep_supervision", False))
         if isinstance(y, (list, tuple)):
             return y if use_ds else y[0]
         else:
-            # Base net returned a single tensor; wrap it if DS expected
             return [y] if use_ds else y
 
 

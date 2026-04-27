@@ -72,6 +72,7 @@ from nnunetv2.utilities.label_handling.label_handling import convert_labelmap_to
 from nnunetv2.utilities.plans_handling.plans_handler import PlansManager
 
 from nnunetv2.training.nnUNetTrainer.nnUNetTrainer import nnUNetTrainer
+from nnunetv2.training.network_architecture.unet_with_attention import vein_to_domain_idx
 
 # ---- helper: independent of self ----
 def _safe_get_patch_size(configuration_manager=None, plans_manager=None, model_dir=None):
@@ -515,6 +516,8 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
             out_channels=num_output_channels,
             patch_size=patch_size,                 # can be None
             deep_supervision=True,
+            num_domains=5,
+            domain_embed_dim=32,
         )
         # Keep DS flags consistent
         for attr in ('do_ds', 'deep_supervision', 'enable_deep_supervision'):
@@ -545,6 +548,8 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
             out_channels=num_output_channels,
             patch_size=patch_size,
             deep_supervision=True,
+            num_domains=5,
+            domain_embed_dim=32,
         )
         for attr in ("do_ds", "deep_supervision", "enable_deep_supervision"):
             if hasattr(net, attr):
@@ -1153,9 +1158,14 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
     
         # ---------- forward + sanitize + loss all in one autocast ----------
         use_amp = (self.device.type == 'cuda')
+        domain_idxs = torch.tensor(
+            [vein_to_domain_idx(k) for k in keys],
+            dtype=torch.long, device=self.device
+        )
+
         with autocast(self.device.type, enabled=use_amp):
-            net_out = self.network(data)
-    
+            net_out = self.network(data, domain_idx=domain_idxs)
+
             # Make a list of heads, even if there's only one
             # if isinstance(net_out, (list, tuple)):
             #     outputs = list(net_out)
@@ -1274,8 +1284,13 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
         # If the device_type is 'cpu' then it's slow as heck and needs to be disabled.
         # If the device_type is 'mps' then it will complain that mps is not implemented, even if enabled=False is set. Whyyyyyyy. (this is why we don't make use of enabled=False)
         # So autocast will only be active if we have a cuda device.
+        domain_idxs = torch.tensor(
+            [vein_to_domain_idx(k) for k in keys],
+            dtype=torch.long, device=self.device
+        )
+
         with autocast(self.device.type, enabled=True) if self.device.type == 'cuda' else dummy_context():
-            output = self.network(data)
+            output = self.network(data, domain_idx=domain_idxs)
             l = self.loss(output, target, data, b0_dir=b0_dirs)
             del data
 
@@ -1439,14 +1454,14 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
         # messing with state dict naming schemes. Facepalm.
         if self.is_ddp:
             if isinstance(self.network.module, OptimizedModule):
-                self.network.module._orig_mod.load_state_dict(new_state_dict)
+                self.network.module._orig_mod.load_state_dict(new_state_dict, strict=False)
             else:
-                self.network.module.load_state_dict(new_state_dict)
+                self.network.module.load_state_dict(new_state_dict, strict=False)
         else:
             if isinstance(self.network, OptimizedModule):
-                self.network._orig_mod.load_state_dict(new_state_dict)
+                self.network._orig_mod.load_state_dict(new_state_dict, strict=False)
             else:
-                self.network.load_state_dict(new_state_dict)
+                self.network.load_state_dict(new_state_dict, strict=False)
         self.optimizer.load_state_dict(checkpoint['optimizer_state'])
         if self.grad_scaler is not None:
             if checkpoint['grad_scaler_state'] is not None:
@@ -1523,6 +1538,9 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
 
                 self.print_to_log_file(f'{k}, shape {data.shape}, rank {self.local_rank}')
                 output_filename_truncated = join(validation_output_folder, k)
+
+                # set domain so the FiLM layers use the correct conditioning
+                self.network.default_domain_idx = vein_to_domain_idx(k)
 
                 prediction = predictor.predict_sliding_window_return_logits(data)
                 prediction = prediction.cpu()
