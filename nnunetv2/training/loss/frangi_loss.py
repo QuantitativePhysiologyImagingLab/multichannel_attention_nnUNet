@@ -371,40 +371,19 @@ class FrangiLoss(nn.Module):
 
         valid = (V_gate > 0.51) & (brain_mask > 0)
 
-        # ---- loss: gradients flow through vein_p (soft probability) ----
-        # V_gate and V_I are fixed priors from the QSM image (no grad)
-        margin = 0.1
-
+        # ---- completion hinge: gradient flows through vein_p ----
+        # V_gate is a fixed prior (Frangi of QSM image, no grad).
+        # Penalise when vein_p is BELOW V_gate in tubular regions — one-sided,
+        # bounded at zero, so it cannot dominate the total loss.
         if valid.any():
-            # encourage high vein probability where QSM image looks tubular
-            loss_selfV = -(V_gate[valid] * vein_p[valid]).mean()
-            # hinge: penalize low vein prob where QSM strongly suggests vessel
-            loss_hinge = (torch.relu(V_I[valid] + margin - vein_p[valid]) * V_gate[valid]).mean()
+            loss_hinge = F.relu(V_gate[valid].detach() - vein_p[valid]).mean()
         else:
-            loss_selfV = vein_p.new_zeros(())
             loss_hinge = vein_p.new_zeros(())
 
-        # 3) background suppression: penalize vein prob where image is confidently non-tubular
-        # non_vessel = (V_I < 0.05).float()
-        # # denom = non_vessel.sum().clamp_min(1.0)
-        # loss_bg = torch.mean(torch.square(vein_eval * non_vessel))
+        loss = loss_hinge
 
-        # ---- combine, clamp → fp16-safe ----
-        loss = 10.0 * loss_selfV + 5.0 * loss_hinge
-
-        # snapshot originals for logging
-        selfV_raw  = loss_selfV
-        hinge_raw  = loss_hinge
-        # bg_raw     = loss_bg
-
-        # sanitize in-place
-        if not torch.isfinite(loss_selfV).item():
-            print(f"[WARN] FrangiLoss non-finite selfV={float(selfV_raw):.4f}, hinge={float(hinge_raw):.4f}",
-                flush=True)
-
-        if not torch.isfinite(loss_hinge).item():
-            print(f"[WARN] FrangiLoss non-finite hinge={float(hinge_raw):.4f}, selfV={float(selfV_raw):.4f}",
-                flush=True)
+        if not torch.isfinite(loss).item():
+            print(f"[WARN] FrangiLoss non-finite: {float(loss):.4f}", flush=True)
 
         # return in same dtype as net_output for AMP / GradScaler
         return loss

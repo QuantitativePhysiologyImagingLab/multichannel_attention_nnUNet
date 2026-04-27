@@ -52,8 +52,10 @@ class DeepSupervisionWrapperPassKwargs(nn.Module):
         return total
 
 class VeinPhysics_Frangi_DC_and_CE_loss(nn.Module):
-    def __init__(self, soft_dice_kwargs, ce_kwargs, vpl_kwargs, weight_ce=2, weight_dice=2, 
-                 weight_tversky=1, weight_physics=10, weight_frangi=0.5, ignore_label=None, dice_class=SoftDiceLoss):
+    def __init__(self, soft_dice_kwargs, ce_kwargs, vpl_kwargs, weight_ce=2, weight_dice=2,
+                 weight_tversky=1, weight_physics=10, weight_frangi=0.1,
+                 weight_volume=1.0, volume_thresh=1.25,
+                 ignore_label=None, dice_class=SoftDiceLoss):
         """
         Weights for CE and Dice do not need to sum to one. You can set whatever you want.
         :param soft_dice_kwargs:
@@ -72,6 +74,8 @@ class VeinPhysics_Frangi_DC_and_CE_loss(nn.Module):
         self.weight_physics = weight_physics
         self.weight_tversky = weight_tversky
         self.weight_frangi = weight_frangi
+        self.weight_volume = weight_volume
+        self.volume_thresh = volume_thresh
         self.ignore_label = ignore_label
 
         self.ce = RobustCrossEntropyLoss(**ce_kwargs)
@@ -163,12 +167,16 @@ class VeinPhysics_Frangi_DC_and_CE_loss(nn.Module):
             #     )
             total = total + self.weight_frangi * frangi_loss.to(total.dtype)
 
-            # if self._dbg_count < 5:
-            #     print("TOTAL loss:",
-            #           float(total.detach()),
-            #           "requires_grad=", total.requires_grad,
-            #           flush=True)
-                    
+        # ---- Volume limiter: penalise over-prediction beyond volume_thresh × GT ----
+        if self.weight_volume > 0:
+            with torch.no_grad():
+                gt_vein = (target_dice == 1).float()
+                gt_vol  = gt_vein.sum(dim=(1, 2, 3, 4)).clamp_min(1.0)
+            probs_vol = torch.softmax(net_output.float(), dim=1)
+            pred_vol  = probs_vol[:, 1:2].sum(dim=(1, 2, 3, 4))
+            vol_loss  = torch.relu(pred_vol / gt_vol - self.volume_thresh).mean()
+            total = total + self.weight_volume * vol_loss.to(total.dtype)
+
         if domain_idx is not None:
             methods = [DOMAIN_METHODS[int(i)] for i in domain_idx]
             method_str = ','.join(methods)
@@ -176,7 +184,8 @@ class VeinPhysics_Frangi_DC_and_CE_loss(nn.Module):
             method_str = 'unknown'
         phys_str   = f'{float(phys_loss):.4f}'   if 'phys_loss'   in dir() else 'n/a'
         frangi_str = f'{float(frangi_loss):.4f}' if 'frangi_loss' in dir() else 'n/a'
-        print(f'[{method_str}] DC: {float(dc_loss):.4f}  Phys: {phys_str}  Frangi: {frangi_str}', flush=True)
+        vol_str    = f'{float(vol_loss):.4f}'    if 'vol_loss'    in dir() else 'n/a'
+        print(f'[{method_str}] DC: {float(dc_loss):.4f}  Phys: {phys_str}  Frangi: {frangi_str}  Vol: {vol_str}', flush=True)
 
         return total
 
