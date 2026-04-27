@@ -53,8 +53,8 @@ class DeepSupervisionWrapperPassKwargs(nn.Module):
 
 class VeinPhysics_Frangi_DC_and_CE_loss(nn.Module):
     def __init__(self, soft_dice_kwargs, ce_kwargs, vpl_kwargs, weight_ce=2, weight_dice=2,
-                 weight_tversky=1, weight_physics=10, weight_frangi=0.1,
-                 weight_volume=1.0, volume_thresh=1.25,
+                 weight_tversky=0.5, weight_physics=10, weight_frangi=0.5,
+                 weight_volume=2.0, volume_thresh=1.25,
                  ignore_label=None, dice_class=SoftDiceLoss):
         """
         Weights for CE and Dice do not need to sum to one. You can set whatever you want.
@@ -182,10 +182,14 @@ class VeinPhysics_Frangi_DC_and_CE_loss(nn.Module):
             method_str = ','.join(methods)
         else:
             method_str = 'unknown'
-        phys_str   = f'{float(phys_loss):.4f}'   if 'phys_loss'   in dir() else 'n/a'
-        frangi_str = f'{float(frangi_loss):.4f}' if 'frangi_loss' in dir() else 'n/a'
-        vol_str    = f'{float(vol_loss):.4f}'    if 'vol_loss'    in dir() else 'n/a'
-        print(f'[{method_str}] DC: {float(dc_loss):.4f}  Phys: {phys_str}  Frangi: {frangi_str}  Vol: {vol_str}', flush=True)
+        phys_str   = f'{self.weight_physics * float(phys_loss):.4f}'   if 'phys_loss'   in dir() else 'n/a'
+        frangi_str = f'{self.weight_frangi  * float(frangi_loss):.4f}' if 'frangi_loss' in dir() else 'n/a'
+        vol_str    = f'{self.weight_volume  * float(vol_loss):.4f}'    if 'vol_loss'    in dir() else 'n/a'
+        print(f'[{method_str}] '
+              f'DC: {self.weight_dice * float(dc_loss):.4f}  '
+              f'Phys: {phys_str}  '
+              f'Frangi: {frangi_str}  '
+              f'Vol: {vol_str}', flush=True)
 
         return total
 

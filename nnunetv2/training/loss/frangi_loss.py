@@ -369,7 +369,10 @@ class FrangiLoss(nn.Module):
             V_gate = torch.sigmoid(alpha * (V_I - tau))
             V_gate = F.max_pool3d(V_gate, kernel_size=3, stride=1, padding=1)
 
-        valid = (V_gate > 0.51) & (brain_mask > 0)
+        # Select only the top 30% of Frangi-response voxels (truly tubular regions).
+        # V_gate > 0.51 with alpha=6 is essentially the whole brain after normalisation,
+        # so we threshold on V_I directly instead.
+        valid = (V_I > 0.7) & (brain_mask > 0)
 
         # ---- completion hinge: gradient flows through vein_p ----
         # V_gate is a fixed prior (Frangi of QSM image, no grad).
