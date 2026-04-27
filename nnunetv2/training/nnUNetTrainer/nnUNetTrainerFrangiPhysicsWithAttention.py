@@ -72,7 +72,7 @@ from nnunetv2.utilities.label_handling.label_handling import convert_labelmap_to
 from nnunetv2.utilities.plans_handling.plans_handler import PlansManager
 
 from nnunetv2.training.nnUNetTrainer.nnUNetTrainer import nnUNetTrainer
-from nnunetv2.training.network_architecture.unet_with_attention import vein_to_domain_idx
+from nnunetv2.training.network_architecture.unet_with_attention import vein_to_domain_idx, vein_to_field_idx
 
 # ---- helper: independent of self ----
 def _safe_get_patch_size(configuration_manager=None, plans_manager=None, model_dir=None):
@@ -1159,12 +1159,14 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
         # ---------- forward + sanitize + loss all in one autocast ----------
         use_amp = (self.device.type == 'cuda')
         domain_idxs = torch.tensor(
-            [vein_to_domain_idx(k) for k in keys],
-            dtype=torch.long, device=self.device
+            [vein_to_domain_idx(k) for k in keys], dtype=torch.long, device=self.device
+        )
+        field_idxs = torch.tensor(
+            [vein_to_field_idx(k) for k in keys], dtype=torch.long, device=self.device
         )
 
         with autocast(self.device.type, enabled=use_amp):
-            net_out = self.network(data, domain_idx=domain_idxs)
+            net_out = self.network(data, domain_idx=domain_idxs, field_idx=field_idxs)
 
             # Make a list of heads, even if there's only one
             # if isinstance(net_out, (list, tuple)):
@@ -1196,8 +1198,8 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
             #     net_out = safe_outputs[0]
     
             # compute loss
-            l = self.loss(net_out, target, data, b0_dir=b0_dirs)
-    
+            l = self.loss(net_out, target, data, b0_dir=b0_dirs, domain_idx=domain_idxs)
+
         # ---------- loss sanity check (BEFORE backward) ----------
         # l_det = l.detach()
         # if not torch.isfinite(l_det).all():
@@ -1285,13 +1287,15 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
         # If the device_type is 'mps' then it will complain that mps is not implemented, even if enabled=False is set. Whyyyyyyy. (this is why we don't make use of enabled=False)
         # So autocast will only be active if we have a cuda device.
         domain_idxs = torch.tensor(
-            [vein_to_domain_idx(k) for k in keys],
-            dtype=torch.long, device=self.device
+            [vein_to_domain_idx(k) for k in keys], dtype=torch.long, device=self.device
+        )
+        field_idxs = torch.tensor(
+            [vein_to_field_idx(k) for k in keys], dtype=torch.long, device=self.device
         )
 
         with autocast(self.device.type, enabled=True) if self.device.type == 'cuda' else dummy_context():
-            output = self.network(data, domain_idx=domain_idxs)
-            l = self.loss(output, target, data, b0_dir=b0_dirs)
+            output = self.network(data, domain_idx=domain_idxs, field_idx=field_idxs)
+            l = self.loss(output, target, data, b0_dir=b0_dirs, domain_idx=domain_idxs)
             del data
 
         # we only need the output with the highest output resolution (if DS enabled)
@@ -1539,8 +1543,9 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
                 self.print_to_log_file(f'{k}, shape {data.shape}, rank {self.local_rank}')
                 output_filename_truncated = join(validation_output_folder, k)
 
-                # set domain so the FiLM layers use the correct conditioning
-                self.network.default_domain_idx = vein_to_domain_idx(k)
+                # set domain/field so FiLM layers use the correct conditioning
+                self.network.default_domain_idx  = vein_to_domain_idx(k)
+                self.network.default_field_idx   = vein_to_field_idx(k)
 
                 prediction = predictor.predict_sliding_window_return_logits(data)
                 prediction = prediction.cpu()

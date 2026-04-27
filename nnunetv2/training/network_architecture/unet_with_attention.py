@@ -337,8 +337,170 @@ VEIN_TO_DOMAIN = {
 
 
 def vein_to_domain_idx(case_id: str) -> int:
-    """Maps VEIN_XXX -> domain index using the Excel mapping. Falls back to 0 (TGV) if unknown."""
+    """Maps VEIN_XXX -> QSM method index using the Excel mapping. Falls back to 0 (TGV) if unknown."""
     return VEIN_TO_DOMAIN.get(case_id, 0)
+
+
+# Generated from vein_mapping.xlsx — field strength per subject. 0=7T, 1=3T.
+VEIN_TO_FIELD = {
+    'VEIN_000': 0,  # 7T
+    'VEIN_001': 0,  # 7T
+    'VEIN_002': 0,  # 7T
+    'VEIN_003': 0,  # 7T
+    'VEIN_004': 0,  # 7T
+    'VEIN_005': 0,  # 7T
+    'VEIN_006': 0,  # 7T
+    'VEIN_007': 0,  # 7T
+    'VEIN_008': 0,  # 7T
+    'VEIN_009': 0,  # 7T
+    'VEIN_010': 0,  # 7T
+    'VEIN_011': 0,  # 7T
+    'VEIN_012': 0,  # 7T
+    'VEIN_013': 0,  # 7T
+    'VEIN_014': 0,  # 7T
+    'VEIN_015': 1,  # 3T
+    'VEIN_016': 1,  # 3T
+    'VEIN_017': 1,  # 3T
+    'VEIN_018': 0,  # 7T
+    'VEIN_019': 0,  # 7T
+    'VEIN_020': 0,  # 7T
+    'VEIN_021': 0,  # 7T
+    'VEIN_022': 0,  # 7T
+    'VEIN_023': 0,  # 7T
+    'VEIN_024': 0,  # 7T
+    'VEIN_025': 0,  # 7T
+    'VEIN_026': 0,  # 7T
+    'VEIN_027': 1,  # 3T
+    'VEIN_028': 1,  # 3T
+    'VEIN_029': 1,  # 3T
+    'VEIN_030': 1,  # 3T
+    'VEIN_031': 1,  # 3T
+    'VEIN_032': 1,  # 3T
+    'VEIN_033': 1,  # 3T
+    'VEIN_034': 1,  # 3T
+    'VEIN_035': 1,  # 3T
+    'VEIN_036': 1,  # 3T
+    'VEIN_037': 1,  # 3T
+    'VEIN_038': 1,  # 3T
+    'VEIN_039': 1,  # 3T
+    'VEIN_040': 1,  # 3T
+    'VEIN_041': 1,  # 3T
+    'VEIN_042': 1,  # 3T
+    'VEIN_043': 1,  # 3T
+    'VEIN_044': 1,  # 3T
+    'VEIN_045': 1,  # 3T
+    'VEIN_046': 1,  # 3T
+    'VEIN_047': 1,  # 3T
+    'VEIN_048': 1,  # 3T
+    'VEIN_049': 1,  # 3T
+    'VEIN_050': 1,  # 3T
+    'VEIN_051': 1,  # 3T
+    'VEIN_052': 1,  # 3T
+    'VEIN_053': 1,  # 3T
+    'VEIN_054': 0,  # 7T
+    'VEIN_055': 0,  # 7T
+    'VEIN_056': 0,  # 7T
+    'VEIN_057': 0,  # 7T
+    'VEIN_058': 0,  # 7T
+    'VEIN_059': 0,  # 7T
+    'VEIN_060': 0,  # 7T
+    'VEIN_061': 0,  # 7T
+    'VEIN_062': 0,  # 7T
+    'VEIN_063': 0,  # 7T
+    'VEIN_064': 0,  # 7T
+    'VEIN_065': 0,  # 7T
+    'VEIN_066': 0,  # 7T
+    'VEIN_067': 0,  # 7T
+    'VEIN_068': 0,  # 7T
+    'VEIN_069': 0,  # 7T
+    'VEIN_070': 0,  # 7T
+    'VEIN_071': 0,  # 7T
+    'VEIN_072': 0,  # 7T
+    'VEIN_073': 0,  # 7T
+    'VEIN_074': 0,  # 7T
+    'VEIN_075': 0,  # 7T
+    'VEIN_076': 0,  # 7T
+    'VEIN_077': 0,  # 7T
+    'VEIN_078': 0,  # 7T
+    'VEIN_079': 0,  # 7T
+    'VEIN_080': 0,  # 7T
+    'VEIN_081': 0,  # 7T
+    'VEIN_082': 0,  # 7T
+    'VEIN_083': 0,  # 7T
+    'VEIN_084': 0,  # 7T
+    'VEIN_085': 0,  # 7T
+    'VEIN_086': 0,  # 7T
+    'VEIN_087': 0,  # 7T
+    'VEIN_088': 0,  # 7T
+    'VEIN_089': 0,  # 7T
+    'VEIN_090': 0,  # 7T
+    'VEIN_091': 0,  # 7T
+    'VEIN_092': 0,  # 7T
+    'VEIN_093': 0,  # 7T
+    'VEIN_094': 0,  # 7T
+    'VEIN_095': 0,  # 7T
+    'VEIN_096': 0,  # 7T
+    'VEIN_097': 0,  # 7T
+    'VEIN_098': 0,  # 7T
+    'VEIN_099': 0,  # 7T
+    'VEIN_100': 0,  # 7T
+    'VEIN_101': 0,  # 7T
+    'VEIN_102': 0,  # 7T
+    'VEIN_103': 0,  # 7T
+    'VEIN_104': 0,  # 7T
+    'VEIN_105': 0,  # 7T
+    'VEIN_106': 0,  # 7T
+    'VEIN_107': 0,  # 7T
+    'VEIN_108': 0,  # 7T
+    'VEIN_109': 0,  # 7T
+    'VEIN_110': 0,  # 7T
+    'VEIN_111': 0,  # 7T
+    'VEIN_112': 0,  # 7T
+    'VEIN_113': 0,  # 7T
+    'VEIN_114': 0,  # 7T
+    'VEIN_115': 0,  # 7T
+    'VEIN_116': 0,  # 7T
+    'VEIN_117': 0,  # 7T
+    'VEIN_118': 0,  # 7T
+    'VEIN_119': 0,  # 7T
+    'VEIN_120': 0,  # 7T
+    'VEIN_121': 0,  # 7T
+    'VEIN_122': 0,  # 7T
+    'VEIN_123': 0,  # 7T
+    'VEIN_124': 0,  # 7T
+    'VEIN_125': 0,  # 7T
+    'VEIN_126': 0,  # 7T
+    'VEIN_127': 0,  # 7T
+    'VEIN_128': 0,  # 7T
+    'VEIN_129': 0,  # 7T
+    'VEIN_130': 0,  # 7T
+    'VEIN_131': 0,  # 7T
+    'VEIN_132': 0,  # 7T
+    'VEIN_133': 0,  # 7T
+    'VEIN_134': 0,  # 7T
+    'VEIN_135': 0,  # 7T
+    'VEIN_136': 0,  # 7T
+    'VEIN_137': 0,  # 7T
+    'VEIN_138': 0,  # 7T
+    'VEIN_139': 0,  # 7T
+    'VEIN_140': 0,  # 7T
+    'VEIN_141': 0,  # 7T
+    'VEIN_142': 0,  # 7T
+    'VEIN_143': 0,  # 7T
+    'VEIN_144': 0,  # 7T
+    'VEIN_145': 0,  # 7T
+    'VEIN_146': 0,  # 7T
+    'VEIN_147': 0,  # 7T
+    'VEIN_148': 0,  # 7T
+    'VEIN_149': 0,  # 7T
+}
+
+FIELD_STRENGTHS = ['7T', '3T']
+
+
+def vein_to_field_idx(case_id: str) -> int:
+    """Maps VEIN_XXX -> field strength index (0=7T, 1=3T). Falls back to 0 (7T) if unknown."""
+    return VEIN_TO_FIELD.get(case_id, 0)
 
 
 class UNetWithAttention(nn.Module):
@@ -348,7 +510,8 @@ class UNetWithAttention(nn.Module):
         super().__init__()
         self.deep_supervision = deep_supervision
         self.num_domains = num_domains
-        self.default_domain_idx = 0   # used at inference when no idx is supplied
+        self.default_domain_idx = 0   # used at inference when no domain_idx is supplied
+        self.default_field_idx  = 0   # used at inference when no field_idx is supplied (0=7T)
 
         self.enc1 = ConvBlock(in_channels, base_features, 4, 2, 1)
         self.enc2 = ConvBlock(base_features, base_features * 2, 4, 2, 1)
@@ -361,6 +524,8 @@ class UNetWithAttention(nn.Module):
 
         if num_domains > 1:
             self.domain_embed  = nn.Embedding(num_domains, domain_embed_dim)
+            self.field_embed   = nn.Embedding(2, domain_embed_dim)   # 0=7T, 1=3T
+            nn.init.zeros_(self.field_embed.weight)
             self.film_enc1     = FiLMLayer(domain_embed_dim, base_features)
             self.film_enc2     = FiLMLayer(domain_embed_dim, base_features * 2)
             self.film_enc3     = FiLMLayer(domain_embed_dim, base_features * 4)
@@ -368,8 +533,9 @@ class UNetWithAttention(nn.Module):
             self.film_bottle   = FiLMLayer(domain_embed_dim, base_features * 16)
         else:
             self.domain_embed = None
+            self.field_embed  = None
 
-    def forward(self, x, domain_idx=None):
+    def forward(self, x, domain_idx=None, field_idx=None):
         if not self.training:
             self.decoder.deep_supervision = False
         else:
@@ -379,7 +545,11 @@ class UNetWithAttention(nn.Module):
             if domain_idx is None:
                 domain_idx = torch.full((x.shape[0],), self.default_domain_idx,
                                         dtype=torch.long, device=x.device)
-            emb = self.domain_embed(domain_idx)   # (B, embed_dim)
+            if field_idx is None:
+                field_idx = torch.full((x.shape[0],), self.default_field_idx,
+                                       dtype=torch.long, device=x.device)
+            # additive: method embedding + field-strength embedding
+            emb = self.domain_embed(domain_idx) + self.field_embed(field_idx)  # (B, embed_dim)
             x1 = self.film_enc1(self.enc1(x),          emb)
             x2 = self.film_enc2(self.enc2(x1),         emb)
             x3 = self.film_enc3(self.enc3(x2),         emb)

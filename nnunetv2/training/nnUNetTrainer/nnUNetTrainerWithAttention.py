@@ -5,7 +5,7 @@ import torch.nn as nn
 
 from nnunetv2.training.nnUNetTrainer.nnUNetTrainer import nnUNetTrainer
 from nnunetv2.training.network_architecture.unet_with_attention import \
-    UNetWithAttention as _BaseUNetWithAttention, vein_to_domain_idx
+    UNetWithAttention as _BaseUNetWithAttention, vein_to_domain_idx, vein_to_field_idx
 
 
 # --- Prior gate ---
@@ -32,18 +32,18 @@ class PriorGatedUNetWithAttention(_BaseUNetWithAttention):
         assert n_priors >= 1, "Expected at least one prior channel (C >= 2)."
         self.prior_gate = PriorGate(in_priors=n_priors)
 
-    def forward(self, x, domain_idx=None):
+    def forward(self, x, domain_idx=None, field_idx=None):
         img = x[:, 0:1]
         pri = x[:, 1:]                # all prior channels, 1..C-1
         A = self.prior_gate(pri)      # (B,1,*,*,*)
         x_mod = torch.cat([img * (1 + A), x[:, 1:]], dim=1)
-        return super().forward(x_mod, domain_idx=domain_idx)
+        return super().forward(x_mod, domain_idx=domain_idx, field_idx=field_idx)
 
 
 # --- Inference shim: return tuple in training, main tensor in eval ---
 class PriorGatedUNetWithAttentionInfer(PriorGatedUNetWithAttention):
-    def forward(self, x, domain_idx=None):
-        y = super().forward(x, domain_idx=domain_idx)
+    def forward(self, x, domain_idx=None, field_idx=None):
+        y = super().forward(x, domain_idx=domain_idx, field_idx=field_idx)
         use_ds = bool(getattr(self, "do_ds", False)
                       or getattr(self, "deep_supervision", False)
                       or getattr(self, "enable_deep_supervision", False))

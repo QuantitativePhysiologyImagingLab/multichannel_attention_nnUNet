@@ -5,6 +5,7 @@ from nnunetv2.training.loss.vein_susceptometry_loss import PhysicsFieldLoss
 from nnunetv2.training.loss.tversky_loss import FocalTverskyLoss
 from nnunetv2.training.loss.frangi_loss import FrangiLoss
 from nnunetv2.utilities.helpers import softmax_helper_dim1
+from nnunetv2.training.network_architecture.unet_with_attention import DOMAIN_METHODS
 from torch import nn
 import torch.nn.functional as F
 
@@ -83,41 +84,15 @@ class VeinPhysics_Frangi_DC_and_CE_loss(nn.Module):
                 net_output: torch.Tensor,
                 target: torch.Tensor,
                 data: torch.Tensor,
-                b0_dir: torch.Tensor = None) -> torch.Tensor:
+                b0_dir: torch.Tensor = None,
+                domain_idx: torch.Tensor = None) -> torch.Tensor:
         """
         net_output: (B, C, X, Y, Z) logits
         target    : (B, 1 or 2, X, Y, Z) (2 if includes chi/localfield channels for physics)
         data      : (B, C, X, Y, Z) input data tensor
         b0_dir    : (B,3) or (3,) unit vector(s) in image axes
+        domain_idx: (B,) long tensor of QSM method indices
         """
-        
-        # --- DEBUG: only print first few times ---
-        # if not hasattr(self, "_dbg_count"):
-        #     self._dbg_count = 0
-        # if self._dbg_count < 5:
-        #     print("=== VeinPhysics_Frangi_DC_and_CE DEBUG ===", flush=True)
-        #     print("net_output:", net_output.shape, net_output.dtype,
-        #           "requires_grad=", net_output.requires_grad, flush=True)
-        #     print("target    :", target.shape, target.dtype,
-        #           "unique labels=", target.unique().tolist()[:10], flush=True)
-        #     print("data      :", data.shape, data.dtype, flush=True)
-
-        #     # if data is [chi, B_meas, V_I, ...]
-        #     chi = data[:, 0:1]
-        #     Bm  = data[:, 1:2]
-        #     VI  = data[:, 2:3] if data.shape[1] > 2 else None
-        #     print("  chi   min/max/mean:",
-        #           float(chi.min()), float(chi.max()), float(chi.mean()), flush=True)
-        #     print("  B_meas min/max/mean:",
-        #           float(Bm.min()), float(Bm.max()), float(Bm.mean()), flush=True)
-        #     if VI is not None:
-        #         print("  V_I   min/max/mean:",
-        #               float(VI.min()), float(VI.max()), float(VI.mean()), flush=True)
-
-        #     if b0_dir is not None:
-        #         print("b0_dir:", b0_dir.shape, b0_dir, flush=True)
-
-        #     self._dbg_count += 1
         
         # ---- ignore-label handling for Dice/CE ----
         if self.ignore_label is not None:
@@ -194,11 +169,14 @@ class VeinPhysics_Frangi_DC_and_CE_loss(nn.Module):
             #           "requires_grad=", total.requires_grad,
             #           flush=True)
                     
-        # print("CE loss: ", ce_loss)
-        print("DC loss: ", dc_loss)
-        # print("Phys loss: ", phys_loss)
-        # print("Tversky: ", tversky_loss)
-        print("Frangi: ", frangi_loss)
+        if domain_idx is not None:
+            methods = [DOMAIN_METHODS[int(i)] for i in domain_idx]
+            method_str = ','.join(methods)
+        else:
+            method_str = 'unknown'
+        phys_str   = f'{float(phys_loss):.4f}'   if 'phys_loss'   in dir() else 'n/a'
+        frangi_str = f'{float(frangi_loss):.4f}' if 'frangi_loss' in dir() else 'n/a'
+        print(f'[{method_str}] DC: {float(dc_loss):.4f}  Phys: {phys_str}  Frangi: {frangi_str}', flush=True)
 
         return total
 
