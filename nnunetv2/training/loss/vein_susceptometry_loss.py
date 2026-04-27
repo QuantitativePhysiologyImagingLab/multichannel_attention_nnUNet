@@ -178,12 +178,9 @@ class PhysicsFieldLoss(nn.Module):
         # print("chi_b ", chi_b.shape)
 
         # Composite susceptibility (detach chi_qsm so we don't backprop into it)
-        chi_total = (1.0 - vein_eval.detach()) * chi_qsm.detach() + vein_eval.detach()*vein_p * chi_b.view(1,1,1,1,1)
+        # Soft blend: gradient flows through vein_p everywhere, not just inside the hard mask
+        chi_total = (1.0 - vein_p) * chi_qsm.detach() + vein_p * chi_b.view(1,1,1,1,1)
 
-        # Full-volume dipole forward model
-        B_pred = self._dipole_field_from_chi(chi_total, self.default_voxel_size, b0_dir)  # (B,1,X,Y,Z)
-
-                # Full-volume dipole forward model
         B_pred = self._dipole_field_from_chi(chi_total, self.default_voxel_size, b0_dir)  # (B,1,X,Y,Z)
 
         # ---------- DEBUG: check B_pred ----------

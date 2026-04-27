@@ -352,7 +352,6 @@ class FrangiLoss(nn.Module):
         probs = torch.softmax(net_output32, dim=1)
         vein_p = probs[:, self.vein_channel:self.vein_channel+1]  # (B,1,*,*,*)
         vein_p = vein_p.clamp(0.0, 1.0)
-        vein_eval = (vein_p >= 0.5).to(net_output.dtype)
 
         alpha, tau = self.alpha_tau
 
@@ -372,51 +371,18 @@ class FrangiLoss(nn.Module):
 
         valid = (V_gate > 0.51) & (brain_mask > 0)
 
-        # ---- Frangi on prediction: NO grad through Frangi ----
-        with torch.no_grad():
-            # smooth prob
-            # P_blur = F.avg_pool3d(
-            #     F.pad(vein_eval, (1,1,1,1,1,1), mode='reflect'),
-            #     kernel_size=3, stride=1
-            # )
-            V_P_prior, _ = frangi_3d(
-                vein_eval,
-                sigmas=self.sig_mask,
-                alpha=0.8,
-                beta=0.8,
-                c=4.0,
-                bright_vessels=True,
-                return_scale=False
-            )
-            # V_P_prior = V_P_prior.clamp(0.0, 1.0)
-            V_P_prior = V_P_prior * 100
-
-
-        # ---- now ALL grads come from simple comparisons: vein_p → loss ----
+        # ---- loss: gradients flow through vein_p (soft probability) ----
+        # V_gate and V_I are fixed priors from the QSM image (no grad)
         margin = 0.1
 
         if valid.any():
-            inner_vein_mask = (V_P_prior == 0) & vein_eval.bool()
-            vmask = valid & ~inner_vein_mask
-
-            # encourage high vein prob where Frangi(P) & Frangi(QSM) agree
-            # (V_P_prior and V_gate are treated as fixed priors)
-            target_tube = (V_P_prior * V_gate).detach()
-
-            # 1) selfV: encourage vein_p ≈ target_tube inside gate
-            # eps = 1e-6
-            # pt = vein_eval[vmask].clamp(eps, 1-eps)
-            # tt = target_tube[vmask].clamp(eps, 1-eps)
-            loss_selfV = -(target_tube[vmask]).mean()
-
-            # 2) completion hinge: want vein_p >= V_I + margin inside gate
-            # desired = (V_I + margin).clamp(0.0, 1.0)
-            # hinge_term = F.softplus(desired - vein_eval, beta=10.0)
-            loss_hinge = ((torch.relu((V_I + margin) - V_P_prior) * V_gate)[vmask]).mean()
-
+            # encourage high vein probability where QSM image looks tubular
+            loss_selfV = -(V_gate[valid] * vein_p[valid]).mean()
+            # hinge: penalize low vein prob where QSM strongly suggests vessel
+            loss_hinge = (torch.relu(V_I[valid] + margin - vein_p[valid]) * V_gate[valid]).mean()
         else:
-            loss_selfV = vein_eval.new_zeros(())
-            loss_hinge = vein_eval.new_zeros(())
+            loss_selfV = vein_p.new_zeros(())
+            loss_hinge = vein_p.new_zeros(())
 
         # 3) background suppression: penalize vein prob where image is confidently non-tubular
         # non_vessel = (V_I < 0.05).float()
@@ -433,22 +399,12 @@ class FrangiLoss(nn.Module):
 
         # sanitize in-place
         if not torch.isfinite(loss_selfV).item():
-            print("[WARN] FrangiLoss non-finite selfV: "
-                f"selfV={float(selfV_raw)}, hinge={float(hinge_raw)}, bg={float(bg_raw)}",
+            print(f"[WARN] FrangiLoss non-finite selfV={float(selfV_raw):.4f}, hinge={float(hinge_raw):.4f}",
                 flush=True)
-            # loss_selfV = torch.nan_to_num(loss_selfV, nan=0.0, posinf=0.0, neginf=0.0)
 
         if not torch.isfinite(loss_hinge).item():
-            print("[WARN] FrangiLoss non-finite hinge: "
-                f"selfV={float(selfV_raw)}, hinge={float(hinge_raw)}, bg={float(bg_raw)}",
+            print(f"[WARN] FrangiLoss non-finite hinge={float(hinge_raw):.4f}, selfV={float(selfV_raw):.4f}",
                 flush=True)
-            # loss_hinge = torch.nan_to_num(loss_hinge, nan=0.0, posinf=0.0, neginf=0.0)
-
-        # if not torch.isfinite(loss_bg).item():
-        #     print("[WARN] FrangiLoss non-finite bg: "
-        #         f"selfV={float(selfV_raw)}, hinge={float(hinge_raw)}, bg={float(bg_raw)}",
-        #         flush=True)
-            # loss_bg = torch.nan_to_num(loss_bg, nan=0.0, posinf=0.0, neginf=0.0)
 
         # return in same dtype as net_output for AMP / GradScaler
         return loss
