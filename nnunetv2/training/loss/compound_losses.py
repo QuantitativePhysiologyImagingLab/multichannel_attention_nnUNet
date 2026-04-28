@@ -116,22 +116,30 @@ class VeinPhysics_Frangi_DC_and_CE_loss(nn.Module):
         
         ce_loss = self.ce(net_output, target_dice[:, 0]) if (self.weight_ce != 0 and self.ce is not None and (self.ignore_label is None or num_fg > 0)) else 0.0
 
-        if self.weight_tversky != 0:
-            tversky_loss = self.tversky(net_output, target_dice)
+        # TGV mask: Tversky and Frangi only applied to TGV samples (domain_idx == 0)
+        if domain_idx is not None:
+            tgv_mask = (domain_idx == 0)
+        else:
+            tgv_mask = torch.ones(net_output.shape[0], dtype=torch.bool, device=net_output.device)
+
+        total = self.weight_ce * ce_loss + self.weight_dice * dc_loss
+
+        # ---- Tversky: TGV only ----
+        if self.weight_tversky != 0 and tgv_mask.any():
+            tgv_out = net_output[tgv_mask]
+            tgv_tgt = target_dice[tgv_mask]
+            tversky_loss = self.tversky(tgv_out, tgv_tgt)
+            total = total + self.weight_tversky * tversky_loss
         else:
             tversky_loss = self.tversky(net_output.detach(), target_dice)
 
-        total = self.weight_ce * ce_loss + self.weight_dice * dc_loss + self.weight_tversky*tversky_loss
-
         # ---- Physics term ----
         if self.vpl is not None and self.weight_physics != 0:
-            # normalize b0_dir shape
             if b0_dir is not None:
-                if b0_dir.ndim == 1:  # (3,)
-                    # broadcast to batch
+                if b0_dir.ndim == 1:
                     B = net_output.shape[0]
                     b0_dir = b0_dir.view(1, 3).repeat(B, 1).to(net_output.device, dtype=net_output.dtype)
-                elif b0_dir.ndim == 2:  # (B,3)
+                elif b0_dir.ndim == 2:
                     b0_dir = b0_dir.to(net_output.device, dtype=net_output.dtype)
                 else:
                     raise ValueError("b0_dir must be shape (3,) or (B,3)")
@@ -142,29 +150,14 @@ class VeinPhysics_Frangi_DC_and_CE_loss(nn.Module):
                 b0_dir     = b0_dir,
                 target     = target,
             )
-            total = total + self.weight_physics*phys_loss
+            total = total + self.weight_physics * phys_loss
 
-            # if self._dbg_count < 5:
-            #     print("TOTAL loss:",
-            #           float(total.detach()),
-            #           "requires_grad=", total.requires_grad,
-            #           flush=True)
-
-        # ---- Frangi term ----
-        if self.frangi is not None and self.weight_frangi != 0:
+        # ---- Frangi: TGV only ----
+        if self.frangi is not None and self.weight_frangi != 0 and tgv_mask.any():
+            tgv_out = net_output[tgv_mask]
+            tgv_data = data[tgv_mask]
             with torch.cuda.amp.autocast(enabled=False):
-                frangi_loss = self.frangi(
-                    net_output=net_output.float(),
-                    data=data
-                )
-            # if self._dbg_count < 5:
-            #     print(
-            #         "FRANGI DEBUG:",
-            #         "value=", float(frangi_loss),
-            #         "requires_grad=", frangi_loss.requires_grad,
-            #         "grad_fn=", frangi_loss.grad_fn,
-            #         flush=True
-            #     )
+                frangi_loss = self.frangi(net_output=tgv_out.float(), data=tgv_data)
             total = total + self.weight_frangi * frangi_loss.to(total.dtype)
 
         # ---- Volume limiter: penalise over-prediction beyond volume_thresh × GT ----
@@ -193,13 +186,15 @@ class VeinPhysics_Frangi_DC_and_CE_loss(nn.Module):
             raw = float(_lv[key])
             return f'{raw:.4f}(w={w * raw:.4f})'
 
-        phys_raw   = float(_lv['phys_loss'])   if 'phys_loss'   in _lv else None
-        frangi_raw = float(_lv['frangi_loss']) if 'frangi_loss' in _lv else None
-        vol_raw    = float(_lv['vol_loss'])    if 'vol_loss'    in _lv else None
+        phys_raw    = float(_lv['phys_loss'])    if 'phys_loss'    in _lv else None
+        frangi_raw  = float(_lv['frangi_loss'])  if 'frangi_loss'  in _lv else None
+        vol_raw     = float(_lv['vol_loss'])     if 'vol_loss'     in _lv else None
+        tversky_raw = float(_lv['tversky_loss']) if 'tversky_loss' in _lv else None
 
         print(
             f'[{method_str}] '
             f'DC: {dc_raw:.4f}(w={wdc:.4f})  '
+            f'Tversky: {_wstr("tversky_loss", self.weight_tversky)}  '
             f'Phys: {_wstr("phys_loss", self.weight_physics)}  '
             f'Frangi: {_wstr("frangi_loss", self.weight_frangi)}  '
             f'Vol: {_wstr("vol_loss", self.weight_volume)}',

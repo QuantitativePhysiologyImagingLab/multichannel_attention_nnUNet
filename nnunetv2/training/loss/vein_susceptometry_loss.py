@@ -206,17 +206,28 @@ class PhysicsFieldLoss(nn.Module):
             vein_p * chi_b.view(1, 1, 1, 1, 1), self.default_voxel_size, b0_dir
         )
 
-        # MAE between predicted vein field and residual field, inside brain
-        loss_phys = ((B_vein_pred - B_residual).abs() * brain_mask).sum() / \
-                    brain_mask.sum().clamp_min(1.0)
+        # Evaluate loss in a dilated GT vein neighborhood rather than the whole brain.
+        # Normalizing over brain volume dilutes small vein signals by ~1000x; restricting
+        # to a 5-voxel dilation of GT veins gives each vein equal local weight.
+        # Falls back to brain_mask if no GT is available.
+        if gt_vein_mask is not None:
+            eval_mask = F.max_pool3d(
+                gt_vein_mask.detach(), kernel_size=11, stride=1, padding=5
+            ).clamp(0, 1)
+            eval_mask = eval_mask * brain_mask
+        else:
+            eval_mask = brain_mask
+
+        diff = (B_vein_pred - B_residual) * eval_mask
+        loss_phys = diff.abs().sum() / eval_mask.sum().clamp_min(1.0)
 
         # Top-10% tail loss on the same residual (catches localised errors)
-        resid_vals = (B_vein_pred - B_residual).abs()[brain_mask > 0].flatten()
+        resid_vals = diff.abs()[eval_mask > 0].flatten()
         k = max(1, int(self.topk_frac * resid_vals.numel()))
         top10 = torch.topk(resid_vals, k).values.mean()
 
-        # Sign consistency: vein field and residual field should agree in sign
-        sign_hinge = F.relu(-(B_vein_pred * B_residual.detach())[brain_mask > 0]).mean()
+        # Sign consistency in eval region
+        sign_hinge = F.relu(-(B_vein_pred * B_residual.detach())[eval_mask > 0]).mean()
 
         # Simple weighted combination (drop mae_masked — redundant with loss_phys now)
         L = loss_phys + 0.15 * top10 + 0.05 * sign_hinge

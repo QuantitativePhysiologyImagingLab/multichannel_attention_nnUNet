@@ -297,7 +297,7 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
         self.probabilistic_oversampling = False
         self.num_iterations_per_epoch = 250
         self.num_val_iterations_per_epoch = 50
-        self.num_epochs = 2000
+        self.num_epochs = 500
         self.current_epoch = 0
         self.enable_deep_supervision = True
 
@@ -616,10 +616,10 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
                             {},
                             {},
                             weight_ce=1,
-                            weight_dice=0.5,
+                            weight_dice=1,
                             weight_tversky=1,
                             weight_physics=3,
-                            weight_frangi=0.5,
+                            weight_frangi=0.1,
                             weight_volume=0.0,
                             ignore_label=self.label_manager.ignore_label,
                             dice_class=MemoryEfficientSoftDiceLoss)
