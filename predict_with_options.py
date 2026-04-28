@@ -96,10 +96,10 @@ def _set_domain(network, domain_idx: int, field_idx: int = 0):
 def _find_model_folder(dataset: str, trainer: str, plans: str) -> str:
     from nnunetv2.paths import nnUNet_results
     import glob
-    pattern = os.path.join(nnUNet_results, f'*{dataset}*', f'{trainer}___{plans}___3d_fullres')
+    pattern = os.path.join(nnUNet_results, f'*{dataset}*', f'{trainer}__{plans}__3d_fullres')
     matches = glob.glob(pattern)
     if not matches:
-        pattern2 = os.path.join(nnUNet_results, dataset, f'{trainer}___{plans}___3d_fullres')
+        pattern2 = os.path.join(nnUNet_results, dataset, f'{trainer}__{plans}__3d_fullres')
         matches = glob.glob(pattern2)
     if not matches:
         raise FileNotFoundError(
