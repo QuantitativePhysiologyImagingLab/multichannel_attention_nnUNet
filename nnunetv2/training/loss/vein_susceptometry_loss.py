@@ -141,27 +141,27 @@ class PhysicsFieldLoss(nn.Module):
         B_meas     = self._resize_like(B_meas,     net_output, is_mask=False)
         brain_mask = self._resize_like(brain_mask, net_output, is_mask=True)
 
+        # Always compute gt_vein_mask when target is available — needed for both
+        # chi_b estimation and the gradient-aware chi_total formulation below.
+        gt_vein_mask = None
+        if target is not None:
+            gt_vein_mask = (target[:, 0:1] == self.vein_channel).to(device=net_output.device)
+            gt_vein_mask = self._resize_like(gt_vein_mask.float(), chi_qsm, is_mask=True)
+
         # chi_blood (ppm): derive from GT vein mask if target is provided, else fall back
         if chi_blood_ppm is not None:
             chi_b = torch.tensor(chi_blood_ppm, device=net_output.device, dtype=net_output.dtype)
-        elif target is not None:
-            # target[:, 0] holds integer class labels; vein_channel label == self.vein_channel
-            gt_vein_mask = (target[:, 0:1] == self.vein_channel).to(device=net_output.device)
-            gt_vein_mask = self._resize_like(gt_vein_mask.float(), chi_qsm, is_mask=True)
+        elif gt_vein_mask is not None:
             gt_vein_bool = (gt_vein_mask > 0) & (brain_mask > 0)
             if gt_vein_bool.any():
-                # Clip vein vals to their own p5/p95 before estimating chi_b.
-                # This removes artifact outliers in noisy QSMs (L1/MEDI) without
-                # touching legitimate high-chi voxels in clean methods (TGV).
                 vein_vals = chi_qsm[gt_vein_bool].float()
                 p5,  p95  = torch.quantile(vein_vals, torch.tensor([0.05, 0.95], device=vein_vals.device))
                 vein_vals = vein_vals.clamp(p5, p95)
                 p20       = torch.quantile(vein_vals, 0.20)
                 top80     = vein_vals[vein_vals >= p20]
                 chi_b     = top80.mean()
-                # if self.debug:
                 print(f"[PHYSICS] chi_b={float(chi_b):.4f} ppm "
-                        f"(top-80% of {gt_vein_bool.sum().item()} GT vein voxels)", flush=True)
+                      f"(top-80% of {gt_vein_bool.sum().item()} GT vein voxels)", flush=True)
             else:
                 chi_b = torch.tensor(float(self._chi_blood), device=net_output.device, dtype=net_output.dtype)
         else:
@@ -172,14 +172,20 @@ class PhysicsFieldLoss(nn.Module):
 
         chi_b = chi_b.view(1, 1, 1, 1, 1)
 
-        # print("vein_eval ", vein_eval.shape)
-        # print("chi_qsm ", chi_qsm.shape)
-        # print("vein_p ", vein_p.shape)
-        # print("chi_b ", chi_b.shape)
-
-        # Composite susceptibility (detach chi_qsm so we don't backprop into it)
-        # Soft blend: gradient flows through vein_p everywhere, not just inside the hard mask
-        chi_total = (1.0 - vein_p) * chi_qsm.detach() + vein_p * chi_b.view(1,1,1,1,1)
+        # Gradient-aware composite susceptibility.
+        #
+        # The naive blend (1-p)*chi_qsm + p*chi_b has gradient ∝ (chi_b - chi_qsm).
+        # For TGV, chi_qsm already recovers blood susceptibility accurately, so
+        # chi_b - chi_qsm ≈ 0 inside veins → near-zero gradient → no learning.
+        #
+        # Fix: zero out GT vein regions from the background chi. Now vein_p must
+        # explain the susceptibility in those regions. Gradient at vein voxels
+        # becomes chi_b (always nonzero) regardless of QSM method accuracy.
+        if gt_vein_mask is not None:
+            chi_bg = chi_qsm.detach() * (1.0 - gt_vein_mask.detach())
+        else:
+            chi_bg = chi_qsm.detach()
+        chi_total = chi_bg + vein_p * chi_b.view(1, 1, 1, 1, 1)
 
         B_pred = self._dipole_field_from_chi(chi_total, self.default_voxel_size, b0_dir)  # (B,1,X,Y,Z)
 

@@ -370,16 +370,17 @@ class FrangiLoss(nn.Module):
             V_gate = F.max_pool3d(V_gate, kernel_size=3, stride=1, padding=1)
 
         # Select only the top 30% of Frangi-response voxels (truly tubular regions).
-        # V_gate > 0.51 with alpha=6 is essentially the whole brain after normalisation,
-        # so we threshold on V_I directly instead.
-        valid = (V_I > 0.7) & (brain_mask > 0)
+        # Top ~10% of Frangi response: high-confidence tubular voxels only.
+        # V_I > 0.7 (30% of brain) was too broad — unlabeled tubular structures
+        # kept the average flat even as Dice improved on labeled veins.
+        valid = (V_I > 0.9) & (brain_mask > 0)
 
-        # ---- completion hinge: gradient flows through vein_p ----
-        # V_gate is a fixed prior (Frangi of QSM image, no grad).
-        # Penalise when vein_p is BELOW V_gate in tubular regions — one-sided,
-        # bounded at zero, so it cannot dominate the total loss.
+        # ---- completion hinge weighted by V_I ----
+        # Weight each voxel by its Frangi response so the highest-confidence
+        # tubular voxels drive the gradient, not the noisy borderline ones.
         if valid.any():
-            loss_hinge = F.relu(V_gate[valid].detach() - vein_p[valid]).mean()
+            vi_w = V_I[valid].detach()
+            loss_hinge = (vi_w * F.relu(V_gate[valid].detach() - vein_p[valid])).mean()
         else:
             loss_hinge = vein_p.new_zeros(())
 
