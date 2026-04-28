@@ -620,6 +620,7 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
                             weight_tversky=1,
                             weight_physics=2,
                             weight_frangi=0.1,
+                            weight_volume=0.0,
                             ignore_label=self.label_manager.ignore_label,
                             dice_class=MemoryEfficientSoftDiceLoss)
 
