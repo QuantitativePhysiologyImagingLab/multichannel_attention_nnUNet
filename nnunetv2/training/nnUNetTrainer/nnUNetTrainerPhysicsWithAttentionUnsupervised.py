@@ -610,11 +610,11 @@ class nnUNetTrainerPhysicsWithAttentionUnsupervised(nnUNetTrainer):
                             'do_bg': True, 'smooth': 1e-5, 'ddp': self.is_ddp},
                             {},
                             {},
-                            weight_ce=0.5, 
-                            weight_dice=0.1, 
-                            weight_tversky=0.1, 
-                            weight_physics=20, 
-                            weight_frangi=0.2,
+                            weight_ce=0.5,
+                            weight_dice=0.1,
+                            weight_tversky=0.1,
+                            weight_physics=2,
+                            weight_frangi=0.0,
                             ignore_label=self.label_manager.ignore_label,
                             dice_class=MemoryEfficientSoftDiceLoss)
 
