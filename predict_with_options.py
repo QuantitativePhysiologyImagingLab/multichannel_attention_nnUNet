@@ -72,9 +72,9 @@ def main():
     # inject domain + field indices into the network before prediction
     _set_domain(predictor.network, domain_idx, field_idx)
 
-    predictor.predict_from_raw_data(
+    predictor.predict_from_files(
         list_of_lists_or_source_folder=args.i,
-        output_folder=args.o,
+        output_folder_or_list_of_truncated_output_files=args.o,
         save_probabilities=args.save_probs,
         overwrite=True,
         num_processes_preprocessing=2,
