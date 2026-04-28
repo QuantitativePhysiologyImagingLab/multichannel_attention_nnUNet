@@ -46,8 +46,8 @@ def main():
     parser.add_argument('--disable_tta',   action='store_true')
     args = parser.parse_args()
 
-    domain_idx = METHOD_TO_IDX[args.method.lower() if args.method.lower() in METHOD_TO_IDX
-                                else args.method]
+    method_lower_map = {k.lower(): v for k, v in METHOD_TO_IDX.items()}
+    domain_idx = method_lower_map[args.method.lower()]
     field_idx  = 1 if args.field.lower() == '3t' else 0
     print(f"[predict_with_method] method='{args.method}' (domain={domain_idx})  "
           f"field='{args.field}' (field_idx={field_idx})")
