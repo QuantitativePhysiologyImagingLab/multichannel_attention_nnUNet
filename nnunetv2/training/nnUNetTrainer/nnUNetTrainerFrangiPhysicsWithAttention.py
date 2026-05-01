@@ -617,9 +617,9 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
                             {},
                             weight_ce=1,
                             weight_dice=1,
-                            weight_tversky=1,
-                            weight_physics=3,
-                            weight_frangi=0.1,
+                            weight_tversky=0.5,
+                            weight_physics=2,
+                            weight_frangi=0.25,
                             weight_volume=0.0,
                             ignore_label=self.label_manager.ignore_label,
                             dice_class=MemoryEfficientSoftDiceLoss)
@@ -783,7 +783,10 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
         if self.fold == "all":
             # if fold==all then we use all images for training and validation
             case_identifiers = self.dataset_class.get_identifiers(self.preprocessed_dataset_folder)
-            tr_keys = case_identifiers
+            # restrict to TGV (0) and MEDI (1) only
+            tr_keys = [k for k in case_identifiers if vein_to_domain_idx(k) in (0, 1)]
+            self.print_to_log_file(f"[domain filter] keeping {len(tr_keys)}/{len(case_identifiers)} "
+                                   f"cases (TGV+MEDI only)")
             val_keys = tr_keys
         else:
             splits_file = join(self.preprocessed_dataset_folder_base, "splits_final.json")

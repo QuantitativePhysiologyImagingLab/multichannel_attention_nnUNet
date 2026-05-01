@@ -116,19 +116,11 @@ class VeinPhysics_Frangi_DC_and_CE_loss(nn.Module):
         
         ce_loss = self.ce(net_output, target_dice[:, 0]) if (self.weight_ce != 0 and self.ce is not None and (self.ignore_label is None or num_fg > 0)) else 0.0
 
-        # TGV mask: Tversky and Frangi only applied to TGV samples (domain_idx == 0)
-        if domain_idx is not None:
-            tgv_mask = (domain_idx == 0)
-        else:
-            tgv_mask = torch.ones(net_output.shape[0], dtype=torch.bool, device=net_output.device)
-
         total = self.weight_ce * ce_loss + self.weight_dice * dc_loss
 
-        # ---- Tversky: TGV only ----
-        if self.weight_tversky != 0 and tgv_mask.any():
-            tgv_out = net_output[tgv_mask]
-            tgv_tgt = target_dice[tgv_mask]
-            tversky_loss = self.tversky(tgv_out, tgv_tgt)
+        # ---- Tversky: all samples ----
+        if self.weight_tversky != 0:
+            tversky_loss = self.tversky(net_output, target_dice)
             total = total + self.weight_tversky * tversky_loss
         else:
             tversky_loss = self.tversky(net_output.detach(), target_dice)
@@ -152,12 +144,10 @@ class VeinPhysics_Frangi_DC_and_CE_loss(nn.Module):
             )
             total = total + self.weight_physics * phys_loss
 
-        # ---- Frangi: TGV only ----
-        if self.frangi is not None and self.weight_frangi != 0 and tgv_mask.any():
-            tgv_out = net_output[tgv_mask]
-            tgv_data = data[tgv_mask]
+        # ---- Frangi: all samples ----
+        if self.frangi is not None and self.weight_frangi != 0:
             with torch.cuda.amp.autocast(enabled=False):
-                frangi_loss = self.frangi(net_output=tgv_out.float(), data=tgv_data)
+                frangi_loss = self.frangi(net_output=net_output.float(), data=data)
             total = total + self.weight_frangi * frangi_loss.to(total.dtype)
 
         # ---- Volume limiter: penalise over-prediction beyond volume_thresh × GT ----
