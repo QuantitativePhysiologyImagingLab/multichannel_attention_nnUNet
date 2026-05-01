@@ -66,7 +66,7 @@ def main():
     predictor.initialize_from_trained_model_folder(
         model_training_output_dir=_find_model_folder(args.d, args.tr, args.p),
         use_folds=(args.f,),
-        checkpoint_name='checkpoint_final.pth',
+        checkpoint_name='checkpoint_temp.pth',
     )
 
     # inject domain + field indices into the network before prediction
