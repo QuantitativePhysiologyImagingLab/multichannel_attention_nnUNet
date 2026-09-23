@@ -1303,43 +1303,46 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
                           qsm_mask=qsm_mask)
 
         # ---------- loss sanity check (BEFORE backward) ----------
-        # l_det = l.detach()
-        # if not torch.isfinite(l_det).all():
-        #     print(f"[WARN] total loss non-finite: {float(l_det)}; skipping batch", flush=True)
-        #     self.optimizer.zero_grad(set_to_none=True)
-        #     return {'loss': np.array(np.nan, dtype=np.float32)}
-    
+        # Re-enabled: with no guard here, a single non-finite loss/gradient
+        # (e.g. from a physics-loss edge case) gets applied to the weights by
+        # the optimizer, and since a NaN weight makes EVERY subsequent
+        # forward pass NaN, that one bad step permanently corrupts the rest
+        # of the run with no crash/warning -- exactly what happened before
+        # this was re-enabled. Skipping the bad batch is cheap insurance.
+        l_det = l.detach()
+        if not torch.isfinite(l_det).all():
+            print(f"[WARN] total loss non-finite: {float(l_det)}; skipping batch", flush=True)
+            self.optimizer.zero_grad(set_to_none=True)
+            return {'loss': np.array(np.nan, dtype=np.float32)}
+
         # ---------- backward ----------
         if self.grad_scaler is not None:
             self.grad_scaler.scale(l).backward()
             self.grad_scaler.unscale_(self.optimizer)
-    
-            # bad_params = []
-            # for name, p in self.network.named_parameters():
-            #     if p.grad is None:
-            #         continue
-            #     if not torch.isfinite(p.grad).all():
-            #         gmin = float(torch.nan_to_num(p.grad).min())
-            #         gmax = float(torch.nan_to_num(p.grad).max())
-            #         # print(f"[BAD GRAD] {name}: finite?={torch.isfinite(p.grad).all().item()} "
-            #         #       f"min={gmin} max={gmax}", flush=True)
-            #         bad_params.append(name)
-    
-            # if bad_params:
-            #     print("[WARN] Non-finite grads in:", bad_params, flush=True)
-                # self.optimizer.zero_grad(set_to_none=True)
-                # self.grad_scaler.update()
-                # return {'loss': np.array(np.nan, dtype=np.float32)}
-    
+
+            bad_params = []
+            for name, p in self.network.named_parameters():
+                if p.grad is None:
+                    continue
+                if not torch.isfinite(p.grad).all():
+                    bad_params.append(name)
+
+            if bad_params:
+                print(f"[WARN] Non-finite grads in {len(bad_params)} param(s), e.g. {bad_params[:5]}; "
+                      f"skipping optimizer step", flush=True)
+                self.optimizer.zero_grad(set_to_none=True)
+                self.grad_scaler.update()
+                return {'loss': np.array(np.nan, dtype=np.float32)}
+
             grad_norm = torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12.0)
-            # grad_norm_t = torch.tensor(float(grad_norm), device=self.device)
-    
-            # if not torch.isfinite(grad_norm_t):
-            #     print(f"[WARN] non-finite grad norm: {grad_norm}, skipping optimizer step", flush=True)
-            #     self.optimizer.zero_grad(set_to_none=True)
-            #     self.grad_scaler.update()
-            #     return {'loss': np.array(np.nan, dtype=np.float32)}
-    
+            grad_norm_t = torch.as_tensor(grad_norm, device=self.device).float()
+
+            if not torch.isfinite(grad_norm_t):
+                print(f"[WARN] non-finite grad norm: {grad_norm}, skipping optimizer step", flush=True)
+                self.optimizer.zero_grad(set_to_none=True)
+                self.grad_scaler.update()
+                return {'loss': np.array(np.nan, dtype=np.float32)}
+
             self.grad_scaler.step(self.optimizer)
             self.grad_scaler.update()
         else:
@@ -1348,8 +1351,8 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
             grad_norm_t = torch.tensor(float(grad_norm), device=self.device)
             if not torch.isfinite(grad_norm_t):
                 print(f"[WARN] non-finite grad norm (no AMP): {grad_norm}, skipping optimizer step", flush=True)
-                # self.optimizer.zero_grad(set_to_none=True)
-                # return {'loss': np.array(np.nan, dtype=np.float32)}
+                self.optimizer.zero_grad(set_to_none=True)
+                return {'loss': np.array(np.nan, dtype=np.float32)}
             self.optimizer.step()
     
         # nnUNet’s collate_outputs expects something indexable; numpy scalar is fine

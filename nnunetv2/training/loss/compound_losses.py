@@ -95,18 +95,25 @@ class VeinPhysics_Frangi_DC_and_CE_loss(nn.Module):
         self.frangi = FrangiLoss()
 
     def _capped_contribution(self, name: str, raw_loss: torch.Tensor, weight: float,
-                              ref_contribution: float, cap_ratio: float) -> torch.Tensor:
+                              ref_contribution: float, cap_ratio: float,
+                              min_ref_abs: float = 0.1) -> torch.Tensor:
         """
         Returns weight * raw_loss, soft-clamped so its magnitude never exceeds
         cap_ratio * |ref_contribution| (the Dice contribution). Unlike the old
         print-only "[ALARM]", this actually prevents one auxiliary term from
-        dominating the gradient on a bad batch. No-ops if ref_contribution is
-        ~0 (no dice signal to scale against).
+        dominating the gradient on a bad batch.
+
+        ref_contribution is floored at min_ref_abs rather than skipping the
+        cap outright when it's near zero -- a batch with a tiny/near-zero
+        Dice contribution previously let an arbitrarily large, completely
+        uncapped auxiliary contribution through (e.g. weight_physics=20 on a
+        raw phys_loss of ~0.7 -> contribution ~14, uncapped), which produced
+        NaN gradients that silently corrupted the network weights (train_step
+        has no non-finite-loss/grad guard on the AMP path). A floor keeps
+        capping active even when Dice offers no reference signal.
         """
         contribution = weight * raw_loss
-        ref_abs = abs(float(ref_contribution))
-        if ref_abs < 1e-8:
-            return contribution
+        ref_abs = max(abs(float(ref_contribution)), min_ref_abs)
         cap = cap_ratio * ref_abs
         contrib_abs = abs(float(contribution))
         if contrib_abs > cap:
