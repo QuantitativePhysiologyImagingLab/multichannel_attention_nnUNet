@@ -140,8 +140,17 @@ def eigh_3x3_symmetric(H: torch.Tensor):
         + B02*(B01*B12 - B11*B02)
     )
 
-    # clamp for numerical stability
-    detB = detB.clamp(-1.0, 1.0)
+    # Clamp AWAY from the exact +-1 boundary, not at it: d(acos)/dx =
+    # -1/sqrt(1-x^2) is finite everywhere strictly inside (-1,1) but blows up
+    # to +-Inf/NaN exactly at the endpoints. Clamping the value to [-1,1]
+    # keeps the forward pass finite but does nothing for the backward pass --
+    # detB lands at exactly +-1.0 constantly (any near-degenerate/locally
+    # flat Hessian, extremely common on a mostly-uniform probability map),
+    # so this NaN'd on essentially every step once Frangi became
+    # differentiable. A small epsilon margin keeps acos' large-but-finite so
+    # grad clipping (already in train_step) can do its job.
+    _eps = 1e-6
+    detB = detB.clamp(-1.0 + _eps, 1.0 - _eps)
 
     phi = torch.acos(detB) / 3.0
 
