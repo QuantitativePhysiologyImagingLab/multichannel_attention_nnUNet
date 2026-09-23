@@ -866,12 +866,12 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
             self.dataset_class = infer_dataset_class(self.preprocessed_dataset_folder)
 
         if self.fold == "all":
-            # if fold==all then we use all images for training and validation
+            # if fold==all then we use all images for training and validation.
+            # (Previously restricted to TGV+medi only -- removed so star/l1/
+            # ilsqr/R2star cases, including the CIRM/Yasser/R2star cohort
+            # added for this retrain, actually get used.)
             case_identifiers = self.dataset_class.get_identifiers(self.preprocessed_dataset_folder)
-            # restrict to TGV (0) and MEDI (1) only
-            tr_keys = [k for k in case_identifiers if vein_to_domain_idx(k) in (0, 1)]
-            self.print_to_log_file(f"[domain filter] keeping {len(tr_keys)}/{len(case_identifiers)} "
-                                   f"cases (TGV+MEDI only)")
+            tr_keys = case_identifiers
             val_keys = tr_keys
         else:
             splits_file = join(self.preprocessed_dataset_folder_base, "splits_final.json")
