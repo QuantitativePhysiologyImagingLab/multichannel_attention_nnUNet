@@ -1407,9 +1407,15 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
                           qsm_mask=qsm_mask)
             del data
 
-        # we only need the output with the highest output resolution (if DS enabled)
+        # we only need the output with the highest output resolution (if DS enabled).
+        # The network only returns a list during training (self.training=True);
+        # at eval time (always true here, since self.network.eval() is called
+        # in on_validation_epoch_start) it returns a single tensor directly --
+        # output[0] on that tensor would silently slice off the batch dim
+        # instead of indexing a list, so only index if it's actually a list.
         if self.enable_deep_supervision:
-            output = output[0]
+            if isinstance(output, (list, tuple)):
+                output = output[0]
             target = target[0]
 
         # the following is needed for online evaluation. Fake dice (green line)
