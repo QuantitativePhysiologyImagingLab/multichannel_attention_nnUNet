@@ -72,7 +72,82 @@ from nnunetv2.utilities.label_handling.label_handling import convert_labelmap_to
 from nnunetv2.utilities.plans_handling.plans_handler import PlansManager
 
 from nnunetv2.training.nnUNetTrainer.nnUNetTrainer import nnUNetTrainer
-from nnunetv2.training.network_architecture.unet_with_attention import vein_to_domain_idx, vein_to_field_idx
+from nnunetv2.training.network_architecture.unet_with_attention import (
+    UNetWithAttention, vein_to_domain_idx, vein_to_field_idx,
+)
+from nnunetv2.training.loss.channel_layout import (
+    CH_PRIMARY, PRIOR_CHANNELS, N_PRIORS, R2STAR_DOMAIN_IDX,
+)
+
+
+class _PriorGate(nn.Module):
+    """
+    Computes a per-voxel gate from the prior channels (local field, Frangi)
+    and uses it to modulate the single primary image channel:
+    ``gated = img * (1 + gate(priors))``. Only ``gated`` (still 1 channel)
+    ever enters the encoder — priors are never concatenated in as extra
+    channels.
+
+    At inference, when no real priors are available, ``constant_gate``
+    returns exactly what ``forward`` would produce for an all-zero prior
+    input — a single learned scalar (the 1x1x1 conv's bias term, since the
+    weight contribution vanishes on zero input) — without running any
+    conv/sigmoid over a dummy zero-filled volume. This is what keeps
+    inference genuinely single-channel: no prior files need to be
+    generated or supplied to get a well-defined gate.
+    """
+    def __init__(self, n_priors: int = N_PRIORS):
+        super().__init__()
+        self.to_gate = nn.Conv3d(n_priors, 1, kernel_size=1, bias=True)
+        self.gamma = nn.Parameter(torch.tensor(1.0))
+
+    def forward(self, priors: torch.Tensor) -> torch.Tensor:
+        return self.gamma * torch.sigmoid(self.to_gate(priors))
+
+    def constant_gate(self, ref: torch.Tensor) -> torch.Tensor:
+        const = self.gamma * torch.sigmoid(self.to_gate.bias)  # shape (1,)
+        return const.view(1, 1, 1, 1, 1).to(device=ref.device, dtype=ref.dtype)
+
+
+class PriorGatedSingleChannelUNet(UNetWithAttention):
+    """
+    Structurally identical to ``UNetWithAttention(in_channels=1, ...)`` —
+    the encoder never sees more than 1 channel, at train or inference time.
+    The difference is purely in what that 1 channel *contains*: during
+    training it can be ``img * (1 + gate(priors))`` where the gate is
+    computed from real local-field/Frangi values, so those priors genuinely
+    shape what the encoder learns from. ``priors=None`` (the only thing true
+    inference ever supplies) falls back to ``_PriorGate.constant_gate``, a
+    single cheap scalar multiply — no prior data required, no wasted compute.
+    """
+    def __init__(self, out_channels, patch_size, deep_supervision=True,
+                 num_domains=6, domain_embed_dim=32, n_priors=N_PRIORS):
+        super().__init__(in_channels=1, out_channels=out_channels, patch_size=patch_size,
+                         deep_supervision=deep_supervision, num_domains=num_domains,
+                         domain_embed_dim=domain_embed_dim)
+        self.prior_gate = _PriorGate(n_priors=n_priors)
+
+        # Patch-position ("which region of the brain") conditioning. Zero-init
+        # the last layer so position starts with exactly zero effect on the
+        # FiLM embedding and is learned in gradually, rather than injecting a
+        # random signal on top of (possibly warm-started) encoder weights --
+        # same convention already used by FiLMLayer above.
+        self.pos_mlp = nn.Sequential(
+            nn.Linear(3, domain_embed_dim),
+            nn.SiLU(),
+            nn.Linear(domain_embed_dim, domain_embed_dim),
+        )
+        nn.init.zeros_(self.pos_mlp[-1].weight)
+        nn.init.zeros_(self.pos_mlp[-1].bias)
+
+    def forward(self, img, priors=None, domain_idx=None, field_idx=None, pos=None):
+        if priors is not None:
+            gate = self.prior_gate(priors)
+        else:
+            gate = self.prior_gate.constant_gate(img)
+        gated = img * (1.0 + gate)
+        extra_emb = self.pos_mlp(pos) if pos is not None else None
+        return super().forward(gated, domain_idx=domain_idx, field_idx=field_idx, extra_emb=extra_emb)
 
 # ---- helper: independent of self ----
 def _safe_get_patch_size(configuration_manager=None, plans_manager=None, model_dir=None):
@@ -500,23 +575,24 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
         enable_deep_supervision: bool = True,
         **_ignored,   # swallow anything unexpected without error
     ) -> nn.Module:
-        # Your custom net
-        from nnunetv2.training.nnUNetTrainer.nnUNetTrainerWithAttention import (
-            PriorGatedUNetWithAttentionInfer,
-        )
-
         # Only use what predict() actually passes. If you want patch_size, try to read it
         # from arch_init_kwargs, but allow it to be missing.
         patch_size = None
         if isinstance(arch_init_kwargs, dict):
             patch_size = arch_init_kwargs.get('patch_size', None)
 
-        net = PriorGatedUNetWithAttentionInfer(
-            in_channels=num_input_channels,
+        # The encoder only ever sees the primary channel (QSM or R2*, whichever
+        # this case has) — local field and Frangi are training-time-only
+        # gating/loss inputs, never a real extra channel, at train OR
+        # inference time. in_channels is therefore always 1 regardless of how
+        # many channels the dataloader provides (num_input_channels, unused
+        # here, reflects the 3-channel dataloader layout used for the gate +
+        # loss computation).
+        net = PriorGatedSingleChannelUNet(
             out_channels=num_output_channels,
             patch_size=patch_size,                 # can be None
             deep_supervision=True,
-            num_domains=5,
+            num_domains=6,   # TGV, medi, l1, star, ilsqr, R2star
             domain_embed_dim=32,
         )
         # Keep DS flags consistent
@@ -540,15 +616,11 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
         # resolve patch size safely
         patch_size = _safe_get_patch_size(configuration_manager, plans_manager, output_folder)
 
-        from nnunetv2.training.nnUNetTrainer.nnUNetTrainerWithAttention import (
-            PriorGatedUNetWithAttentionInfer,
-        )
-        net = PriorGatedUNetWithAttentionInfer(
-            in_channels=num_input_channels,
+        net = PriorGatedSingleChannelUNet(
             out_channels=num_output_channels,
             patch_size=patch_size,
             deep_supervision=True,
-            num_domains=5,
+            num_domains=6,   # TGV, medi, l1, star, ilsqr, R2star
             domain_embed_dim=32,
         )
         for attr in ("do_ds", "deep_supervision", "enable_deep_supervision"):
@@ -749,8 +821,10 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
                 # broken.
 
                 import hiddenlayer as hl
+                # network only ever takes the single primary channel, regardless
+                # of how many channels the dataloader provides for the loss
                 g = hl.build_graph(self.network,
-                                   torch.rand((1, self.num_input_channels,
+                                   torch.rand((1, 1,
                                                *self.configuration_manager.patch_size),
                                               device=self.device),
                                    transforms=None)
@@ -1168,9 +1242,21 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
         field_idxs = torch.tensor(
             [vein_to_field_idx(k) for k in keys], dtype=torch.long, device=self.device
         )
+        # R2* has no chi/local-field relationship, so those samples must never
+        # contribute to the dipole physics loss.
+        qsm_mask = domain_idxs != R2STAR_DOMAIN_IDX
+        pos = torch.stack([torch.from_numpy(p) for p in batch['patch_pos']], dim=0).to(
+            self.device, dtype=torch.float32)
 
         with autocast(self.device.type, enabled=use_amp):
-            net_out = self.network(data, domain_idx=domain_idxs, field_idx=field_idxs)
+            # The encoder only ever consumes the (gated) primary channel; the
+            # prior channels are passed separately so they can shape the gate
+            # during training, but are never concatenated in as extra
+            # channels — see PriorGatedSingleChannelUNet.forward.
+            net_out = self.network(data[:, CH_PRIMARY:CH_PRIMARY + 1],
+                                    priors=data[:, PRIOR_CHANNELS],
+                                    domain_idx=domain_idxs, field_idx=field_idxs,
+                                    pos=pos)
 
             # Make a list of heads, even if there's only one
             # if isinstance(net_out, (list, tuple)):
@@ -1202,7 +1288,8 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
             #     net_out = safe_outputs[0]
     
             # compute loss
-            l = self.loss(net_out, target, data, b0_dir=b0_dirs, domain_idx=domain_idxs)
+            l = self.loss(net_out, target, data, b0_dir=b0_dirs, domain_idx=domain_idxs,
+                          qsm_mask=qsm_mask)
 
         # ---------- loss sanity check (BEFORE backward) ----------
         # l_det = l.detach()
@@ -1296,10 +1383,17 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
         field_idxs = torch.tensor(
             [vein_to_field_idx(k) for k in keys], dtype=torch.long, device=self.device
         )
+        qsm_mask = domain_idxs != R2STAR_DOMAIN_IDX
+        pos = torch.stack([torch.from_numpy(p) for p in batch['patch_pos']], dim=0).to(
+            self.device, dtype=torch.float32)
 
         with autocast(self.device.type, enabled=True) if self.device.type == 'cuda' else dummy_context():
-            output = self.network(data, domain_idx=domain_idxs, field_idx=field_idxs)
-            l = self.loss(output, target, data, b0_dir=b0_dirs, domain_idx=domain_idxs)
+            output = self.network(data[:, CH_PRIMARY:CH_PRIMARY + 1],
+                                   priors=data[:, PRIOR_CHANNELS],
+                                   domain_idx=domain_idxs, field_idx=field_idxs,
+                                   pos=pos)
+            l = self.loss(output, target, data, b0_dir=b0_dirs, domain_idx=domain_idxs,
+                          qsm_mask=qsm_mask)
             del data
 
         # we only need the output with the highest output resolution (if DS enabled)

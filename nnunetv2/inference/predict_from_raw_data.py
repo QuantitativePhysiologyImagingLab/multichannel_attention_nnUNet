@@ -544,11 +544,63 @@ class nnUNetPredictor(object):
                                                   zip((sx, sy, sz), self.configuration_manager.patch_size)]]))
         return slicers
 
+    def _network_accepts_pos(self) -> bool:
+        """
+        Lazily-cached check of whether self.network's forward() declares a
+        `pos` parameter (patch-position/region conditioning). This predictor
+        is shared, core code used by every trainer/dataset in this fork, not
+        just vein segmentation -- most networks do NOT accept `pos`, so we
+        must never pass it unconditionally (that would crash any other
+        network's forward() with an unexpected-keyword TypeError).
+        """
+        cached = getattr(self, '_network_accepts_pos_cache', None)
+        if cached is not None:
+            return cached
+        mod = self.network
+        if isinstance(mod, (DistributedDataParallel,)):
+            mod = mod.module
+        if isinstance(mod, OptimizedModule):
+            mod = mod._orig_mod
+        accepts = 'pos' in inspect.signature(mod.forward).parameters
+        self._network_accepts_pos_cache = accepts
+        return accepts
+
+    def _call_network(self, x: torch.Tensor, pos: Optional[torch.Tensor] = None):
+        if pos is not None and self._network_accepts_pos():
+            return self.network(x, pos=pos)
+        return self.network(x)
+
+    @staticmethod
+    def _compute_pos_from_slicer(sl, image_shape) -> torch.Tensor:
+        """
+        Normalized patch-center coordinates in [-1, 1], from a sliding-window
+        slicer tuple (`slice(None)` for the channel dim followed by one
+        `slice` per spatial dim) and the full (padded) image's spatial shape.
+        Same convention as nnUNetDataLoader.normalized_patch_center, so a
+        network trained with that conditioning sees a consistent signal at
+        inference.
+        """
+        centers = []
+        for s, dim in zip(sl[1:], image_shape):
+            lo = max(0, s.start if s.start is not None else 0)
+            hi = min(dim, s.stop if s.stop is not None else dim)
+            centers.append((lo + hi) / 2.0)
+        norm = [2.0 * c / max(float(d), 1.0) - 1.0 for c, d in zip(centers, image_shape)]
+        return torch.tensor(norm, dtype=torch.float32)
+
     @torch.inference_mode()
-    def _internal_maybe_mirror_and_predict(self, x: torch.Tensor) -> torch.Tensor:
+    def _internal_maybe_mirror_and_predict(self, x: torch.Tensor,
+                                           pos: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         Returns logits with shape (C, Z, Y, X)  [no batch dim!]
         and guarantees a Tensor even if the network returns a list/tuple.
+
+        pos: optional (1, 3) normalized patch-position tensor, forwarded to
+        the network only if it declares support for it (see
+        _network_accepts_pos). Deliberately NOT flipped along with the
+        mirror-TTA augmentation below -- it represents this patch's true
+        physical location, which doesn't change just because the image
+        content was mirrored for test-time augmentation.
         """
         def _main_head_no_batch(t: torch.Tensor) -> torch.Tensor:
             t = self._as_tensor(t)                  # list/tuple -> Tensor (B,C,...)
@@ -559,7 +611,7 @@ class nnUNetPredictor(object):
         mirror_axes = self.allowed_mirroring_axes if self.use_mirroring else None
 
         # base prediction (C, ...)
-        prediction = _main_head_no_batch(self.network(x))
+        prediction = _main_head_no_batch(self._call_network(x, pos=pos))
 
         if mirror_axes is not None:
             assert len(mirror_axes) == 0 or max(mirror_axes) <= x.ndim - 3, \
@@ -576,7 +628,7 @@ class nnUNetPredictor(object):
 
             for axes_in_tuple in axes_combinations_in:
                 flipped_in  = torch.flip(x, axes_in_tuple)
-                flipped_out = _main_head_no_batch(self.network(flipped_in))
+                flipped_out = _main_head_no_batch(self._call_network(flipped_in, pos=pos))
                 # map input flip dims to output flip dims: a_in -> a_out = a_in - 1
                 axes_out_tuple = tuple(a - 1 for a in axes_in_tuple)
                 prediction  = prediction + torch.flip(flipped_out, axes_out_tuple)
@@ -635,7 +687,11 @@ class nnUNetPredictor(object):
                         queue.task_done()
                         break
                     workon, sl = item
-                    prediction = self._internal_maybe_mirror_and_predict(workon).to(results_device)
+                    pos = None
+                    if self._network_accepts_pos():
+                        pos = self._compute_pos_from_slicer(sl, data.shape[1:]).to(
+                            device=workon.device, dtype=workon.dtype).unsqueeze(0)
+                    prediction = self._internal_maybe_mirror_and_predict(workon, pos=pos).to(results_device)
 
                     if self.use_gaussian:
                         prediction *= gaussian

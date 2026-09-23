@@ -164,11 +164,28 @@ class nnUNetDataLoader(DataLoader):
 
         return bbox_lbs, bbox_ubs
 
+    @staticmethod
+    def normalized_patch_center(bbox_lbs, bbox_ubs, shape) -> np.ndarray:
+        """
+        Normalized patch-center coordinates in [-1, 1] along each axis,
+        relative to the full (preprocessed) image `shape`. `bbox_lbs`/
+        `bbox_ubs` may be negative or exceed `shape` (the dataloader pads
+        patches that hang off the image edge) so we clip to valid image
+        bounds first. This is an approximate "which region of the image did
+        this patch come from" signal, not a precise coordinate frame.
+        """
+        shape = np.asarray(shape, dtype=np.float64)
+        lbs = np.clip(np.asarray(bbox_lbs, dtype=np.float64), 0, shape)
+        ubs = np.clip(np.asarray(bbox_ubs, dtype=np.float64), 0, shape)
+        center = (lbs + ubs) / 2.0
+        return (2.0 * center / np.maximum(shape, 1.0) - 1.0).astype(np.float32)
+
     def generate_train_batch(self):
         selected_keys = self.get_indices()
         # preallocate memory for data and seg
         data_all = np.zeros(self.data_shape, dtype=np.float32)
         seg_all = np.zeros(self.seg_shape, dtype=np.int16)
+        patch_pos_all = []
 
         for j, i in enumerate(selected_keys):
             # oversampling foreground will improve stability of model training, especially if many patches are empty
@@ -183,6 +200,7 @@ class nnUNetDataLoader(DataLoader):
 
             bbox_lbs, bbox_ubs = self.get_bbox(shape, force_fg, properties['class_locations'])
             bbox = [[i, j] for i, j in zip(bbox_lbs, bbox_ubs)]
+            patch_pos_all.append(self.normalized_patch_center(bbox_lbs, bbox_ubs, shape))
 
             # use ACVL utils for that. Cleaner.
             data_all[j] = crop_and_pad_nd(data, bbox, 0)
@@ -213,9 +231,9 @@ class nnUNetDataLoader(DataLoader):
                     else:
                         seg_all = torch.stack(segs)
                     del segs, images
-            return {'data': data_all, 'target': seg_all, 'keys': selected_keys}
+            return {'data': data_all, 'target': seg_all, 'keys': selected_keys, 'patch_pos': patch_pos_all}
 
-        return {'data': data_all, 'target': seg_all, 'keys': selected_keys}
+        return {'data': data_all, 'target': seg_all, 'keys': selected_keys, 'patch_pos': patch_pos_all}
 
 
 if __name__ == '__main__':

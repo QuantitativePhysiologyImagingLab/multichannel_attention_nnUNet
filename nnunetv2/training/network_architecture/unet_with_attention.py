@@ -178,7 +178,7 @@ class FiLMLayer(nn.Module):
         return gamma * x + beta
 
 
-DOMAIN_METHODS = ['TGV', 'medi', 'l1', 'star', 'ilsqr']
+DOMAIN_METHODS = ['TGV', 'medi', 'l1', 'star', 'ilsqr', 'R2star']
 METHOD_TO_IDX  = {m: i for i, m in enumerate(DOMAIN_METHODS)}
 
 # Generated from vein_mapping.xlsx — source of truth for QSM method per subject.
@@ -333,6 +333,90 @@ VEIN_TO_DOMAIN = {
     'VEIN_147': 2,  # l1
     'VEIN_148': 3,  # star
     'VEIN_149': 4,  # ilsqr
+
+    # ---- CIRM + Yasser cohort (imagesTr_v2 / vein_mapping_v2.xlsx) ----
+    # CIRM: 15 subjects x 4 methods (TGV/medi/star/R2star), VEIN_150-209.
+    # Yasser: 10 subjects x 2 methods (medi/R2star), VEIN_210-229.
+    'VEIN_150': 0,  # TGV (CIRM_001)
+    'VEIN_151': 1,  # medi (CIRM_001)
+    'VEIN_152': 3,  # star (CIRM_001)
+    'VEIN_153': 5,  # R2star (CIRM_001)
+    'VEIN_154': 0,  # TGV (CIRM_002)
+    'VEIN_155': 1,  # medi (CIRM_002)
+    'VEIN_156': 3,  # star (CIRM_002)
+    'VEIN_157': 5,  # R2star (CIRM_002)
+    'VEIN_158': 0,  # TGV (CIRM_005)
+    'VEIN_159': 1,  # medi (CIRM_005)
+    'VEIN_160': 3,  # star (CIRM_005)
+    'VEIN_161': 5,  # R2star (CIRM_005)
+    'VEIN_162': 0,  # TGV (CIRM_022)
+    'VEIN_163': 1,  # medi (CIRM_022)
+    'VEIN_164': 3,  # star (CIRM_022)
+    'VEIN_165': 5,  # R2star (CIRM_022)
+    'VEIN_166': 0,  # TGV (CIRM_026)
+    'VEIN_167': 1,  # medi (CIRM_026)
+    'VEIN_168': 3,  # star (CIRM_026)
+    'VEIN_169': 5,  # R2star (CIRM_026)
+    'VEIN_170': 0,  # TGV (CIRM_033)
+    'VEIN_171': 1,  # medi (CIRM_033)
+    'VEIN_172': 3,  # star (CIRM_033)
+    'VEIN_173': 5,  # R2star (CIRM_033)
+    'VEIN_174': 0,  # TGV (CIRM_034)
+    'VEIN_175': 1,  # medi (CIRM_034)
+    'VEIN_176': 3,  # star (CIRM_034)
+    'VEIN_177': 5,  # R2star (CIRM_034)
+    'VEIN_178': 0,  # TGV (CIRM_036)
+    'VEIN_179': 1,  # medi (CIRM_036)
+    'VEIN_180': 3,  # star (CIRM_036)
+    'VEIN_181': 5,  # R2star (CIRM_036)
+    'VEIN_182': 0,  # TGV (CIRM_039)
+    'VEIN_183': 1,  # medi (CIRM_039)
+    'VEIN_184': 3,  # star (CIRM_039)
+    'VEIN_185': 5,  # R2star (CIRM_039)
+    'VEIN_186': 0,  # TGV (CIRM_051)
+    'VEIN_187': 1,  # medi (CIRM_051)
+    'VEIN_188': 3,  # star (CIRM_051)
+    'VEIN_189': 5,  # R2star (CIRM_051)
+    'VEIN_190': 0,  # TGV (CIRM_064)
+    'VEIN_191': 1,  # medi (CIRM_064)
+    'VEIN_192': 3,  # star (CIRM_064)
+    'VEIN_193': 5,  # R2star (CIRM_064)
+    'VEIN_194': 0,  # TGV (CIRM_068)
+    'VEIN_195': 1,  # medi (CIRM_068)
+    'VEIN_196': 3,  # star (CIRM_068)
+    'VEIN_197': 5,  # R2star (CIRM_068)
+    'VEIN_198': 0,  # TGV (CIRM_078)
+    'VEIN_199': 1,  # medi (CIRM_078)
+    'VEIN_200': 3,  # star (CIRM_078)
+    'VEIN_201': 5,  # R2star (CIRM_078)
+    'VEIN_202': 0,  # TGV (CIRM_079)
+    'VEIN_203': 1,  # medi (CIRM_079)
+    'VEIN_204': 3,  # star (CIRM_079)
+    'VEIN_205': 5,  # R2star (CIRM_079)
+    'VEIN_206': 0,  # TGV (CIRM_095)
+    'VEIN_207': 1,  # medi (CIRM_095)
+    'VEIN_208': 3,  # star (CIRM_095)
+    'VEIN_209': 5,  # R2star (CIRM_095)
+    'VEIN_210': 1,  # medi (YASSER_0026)
+    'VEIN_211': 5,  # R2star (YASSER_0026)
+    'VEIN_212': 1,  # medi (YASSER_0028)
+    'VEIN_213': 5,  # R2star (YASSER_0028)
+    'VEIN_214': 1,  # medi (YASSER_0029)
+    'VEIN_215': 5,  # R2star (YASSER_0029)
+    'VEIN_216': 1,  # medi (YASSER_0030)
+    'VEIN_217': 5,  # R2star (YASSER_0030)
+    'VEIN_218': 1,  # medi (YASSER_0032)
+    'VEIN_219': 5,  # R2star (YASSER_0032)
+    'VEIN_220': 1,  # medi (YASSER_0034)
+    'VEIN_221': 5,  # R2star (YASSER_0034)
+    'VEIN_222': 1,  # medi (YASSER_0038)
+    'VEIN_223': 5,  # R2star (YASSER_0038)
+    'VEIN_224': 1,  # medi (YASSER_0039)
+    'VEIN_225': 5,  # R2star (YASSER_0039)
+    'VEIN_226': 1,  # medi (YASSER_0043)
+    'VEIN_227': 5,  # R2star (YASSER_0043)
+    'VEIN_228': 1,  # medi (YASSER_0044)
+    'VEIN_229': 5,  # R2star (YASSER_0044)
 }
 
 
@@ -493,6 +577,34 @@ VEIN_TO_FIELD = {
     'VEIN_147': 0,  # 7T
     'VEIN_148': 0,  # 7T
     'VEIN_149': 0,  # 7T
+
+    # ---- CIRM + Yasser cohort (imagesTr_v2 / vein_mapping_v2.xlsx) ----
+    # All CIRM (VEIN_150-209) and Yasser (VEIN_210-229) subjects are 3T.
+    'VEIN_150': 1, 'VEIN_151': 1, 'VEIN_152': 1, 'VEIN_153': 1,  # CIRM_001, 3T
+    'VEIN_154': 1, 'VEIN_155': 1, 'VEIN_156': 1, 'VEIN_157': 1,  # CIRM_002, 3T
+    'VEIN_158': 1, 'VEIN_159': 1, 'VEIN_160': 1, 'VEIN_161': 1,  # CIRM_005, 3T
+    'VEIN_162': 1, 'VEIN_163': 1, 'VEIN_164': 1, 'VEIN_165': 1,  # CIRM_022, 3T
+    'VEIN_166': 1, 'VEIN_167': 1, 'VEIN_168': 1, 'VEIN_169': 1,  # CIRM_026, 3T
+    'VEIN_170': 1, 'VEIN_171': 1, 'VEIN_172': 1, 'VEIN_173': 1,  # CIRM_033, 3T
+    'VEIN_174': 1, 'VEIN_175': 1, 'VEIN_176': 1, 'VEIN_177': 1,  # CIRM_034, 3T
+    'VEIN_178': 1, 'VEIN_179': 1, 'VEIN_180': 1, 'VEIN_181': 1,  # CIRM_036, 3T
+    'VEIN_182': 1, 'VEIN_183': 1, 'VEIN_184': 1, 'VEIN_185': 1,  # CIRM_039, 3T
+    'VEIN_186': 1, 'VEIN_187': 1, 'VEIN_188': 1, 'VEIN_189': 1,  # CIRM_051, 3T
+    'VEIN_190': 1, 'VEIN_191': 1, 'VEIN_192': 1, 'VEIN_193': 1,  # CIRM_064, 3T
+    'VEIN_194': 1, 'VEIN_195': 1, 'VEIN_196': 1, 'VEIN_197': 1,  # CIRM_068, 3T
+    'VEIN_198': 1, 'VEIN_199': 1, 'VEIN_200': 1, 'VEIN_201': 1,  # CIRM_078, 3T
+    'VEIN_202': 1, 'VEIN_203': 1, 'VEIN_204': 1, 'VEIN_205': 1,  # CIRM_079, 3T
+    'VEIN_206': 1, 'VEIN_207': 1, 'VEIN_208': 1, 'VEIN_209': 1,  # CIRM_095, 3T
+    'VEIN_210': 1, 'VEIN_211': 1,  # YASSER_0026, 3T
+    'VEIN_212': 1, 'VEIN_213': 1,  # YASSER_0028, 3T
+    'VEIN_214': 1, 'VEIN_215': 1,  # YASSER_0029, 3T
+    'VEIN_216': 1, 'VEIN_217': 1,  # YASSER_0030, 3T
+    'VEIN_218': 1, 'VEIN_219': 1,  # YASSER_0032, 3T
+    'VEIN_220': 1, 'VEIN_221': 1,  # YASSER_0034, 3T
+    'VEIN_222': 1, 'VEIN_223': 1,  # YASSER_0038, 3T
+    'VEIN_224': 1, 'VEIN_225': 1,  # YASSER_0039, 3T
+    'VEIN_226': 1, 'VEIN_227': 1,  # YASSER_0043, 3T
+    'VEIN_228': 1, 'VEIN_229': 1,  # YASSER_0044, 3T
 }
 
 FIELD_STRENGTHS = ['7T', '3T']
@@ -535,7 +647,15 @@ class UNetWithAttention(nn.Module):
             self.domain_embed = None
             self.field_embed  = None
 
-    def forward(self, x, domain_idx=None, field_idx=None):
+    def forward(self, x, domain_idx=None, field_idx=None, extra_emb=None):
+        """
+        extra_emb: optional (B, domain_embed_dim) tensor added into the FiLM
+        embedding alongside the domain/field embeddings. Generic on purpose
+        (not "position"-specific) so this base class stays decoupled from
+        whatever a subclass uses it for (e.g. patch-position conditioning in
+        PriorGatedSingleChannelUNet). None -> identical behavior to before
+        this parameter existed.
+        """
         if not self.training:
             self.decoder.deep_supervision = False
         else:
@@ -548,8 +668,10 @@ class UNetWithAttention(nn.Module):
             if field_idx is None:
                 field_idx = torch.full((x.shape[0],), self.default_field_idx,
                                        dtype=torch.long, device=x.device)
-            # additive: method embedding + field-strength embedding
+            # additive: method embedding + field-strength embedding (+ optional extra)
             emb = self.domain_embed(domain_idx) + self.field_embed(field_idx)  # (B, embed_dim)
+            if extra_emb is not None:
+                emb = emb + extra_emb
             x1 = self.film_enc1(self.enc1(x),          emb)
             x2 = self.film_enc2(self.enc2(x1),         emb)
             x3 = self.film_enc3(self.enc3(x2),         emb)

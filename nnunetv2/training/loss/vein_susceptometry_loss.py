@@ -1,6 +1,7 @@
 import torch
 from nnunetv2.training.loss.dice import SoftDiceLoss, MemoryEfficientSoftDiceLoss
 from nnunetv2.training.loss.robust_ce_loss import RobustCrossEntropyLoss, TopKLoss
+from nnunetv2.training.loss.channel_layout import CH_PRIMARY, CH_LOCALFIELD
 from nnunetv2.utilities.helpers import softmax_helper_dim1
 from torch import nn
 import torch.nn.functional as F
@@ -112,16 +113,41 @@ class PhysicsFieldLoss(nn.Module):
                 b0_dir,
                 target=None,
                 brain_mask=None, vein_eval=None,
-                chi_blood_ppm=None):
+                chi_blood_ppm=None,
+                qsm_mask=None):
         """
         net_output: (B,C,X,Y,Z)
         target:     (B,2,X,Y,Z)  [0]=chi_qsm_ppm, [1]=localfield_ppm
         b0_dir:     (3,) or (B,3)
         voxel_size: (sx,sy,sz) in mm
+        qsm_mask:   (B,) bool/float, True where this sample's CH_PRIMARY is an
+                    actual QSM chi map. Samples where it's False (e.g. R2*)
+                    have no valid chi/local-field relationship and must not
+                    contribute to this loss at all. None == all samples are QSM
+                    (backwards-compatible default).
         """
+        B = net_output.shape[0]
+        if qsm_mask is None:
+            qsm_mask = torch.ones(B, dtype=torch.bool, device=net_output.device)
+        else:
+            qsm_mask = qsm_mask.to(device=net_output.device, dtype=torch.bool)
+
+        if not qsm_mask.any():
+            # No QSM samples in this batch — skip the FFT-based dipole
+            # computation entirely rather than doing it and multiplying by zero.
+            zero = net_output.new_zeros(())
+            metrics = {
+                'loss_total': zero, 'loss_phys': zero, 'loss_mae': zero,
+                'loss_top10': zero, 'loss_sign': zero,
+                'chi_blood_ppm': torch.tensor(float(self._chi_blood), device=net_output.device),
+            }
+            return zero, metrics
+
+        qsm_mask_5d = qsm_mask.view(B, 1, 1, 1, 1).to(net_output.dtype)
+
         # Cast priors to the net dtype/device
-        chi_qsm = data[:, 0:1].to(device=net_output.device, dtype=net_output.dtype)   # ppm
-        B_meas  = data[:, 1:2].to(device=net_output.device, dtype=net_output.dtype)   # ppm
+        chi_qsm = data[:, CH_PRIMARY:CH_PRIMARY + 1].to(device=net_output.device, dtype=net_output.dtype)   # ppm
+        B_meas  = data[:, CH_LOCALFIELD:CH_LOCALFIELD + 1].to(device=net_output.device, dtype=net_output.dtype)   # ppm
 
         probs = torch.softmax(net_output, dim=1)  # (B,C,X,Y,Z)
         vein_p = probs[:, self.vein_channel:self.vein_channel+1]  # (B,1,X,Y,Z)
@@ -140,6 +166,10 @@ class PhysicsFieldLoss(nn.Module):
         chi_qsm    = self._resize_like(chi_qsm,    net_output, is_mask=False)
         B_meas     = self._resize_like(B_meas,     net_output, is_mask=False)
         brain_mask = self._resize_like(brain_mask, net_output, is_mask=True)
+
+        # Exclude non-QSM samples (e.g. R2*) from every downstream sum: they
+        # have no valid chi/local-field relationship for this loss to model.
+        brain_mask = brain_mask * qsm_mask_5d
 
         # Always compute gt_vein_mask when target is available — needed for both
         # chi_b estimation and the gradient-aware chi_total formulation below.

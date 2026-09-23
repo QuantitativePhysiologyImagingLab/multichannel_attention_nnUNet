@@ -3,6 +3,7 @@ import torch.nn.functional as F
 from torch import nn, Tensor
 from typing import Optional, Sequence, Tuple, Union
 from torch.cuda.amp import autocast
+from nnunetv2.training.loss.channel_layout import CH_PRIMARY, CH_FRANGI
 
 # -----------------------------
 # 1D Gaussian & its derivatives
@@ -252,9 +253,9 @@ def _frangi_3d_single(
     S  = torch.sqrt((l1**2 + l2**2 + l3**2).clamp_min(eps))
 
     # Vesselness (Frangi '98 variant)
-    expRa = torch.exp(-(Ra**2) / (2*alpha**2))
-    expRb = torch.exp(-(Rb**2) / (2*beta**2))
-    expS  = 1.0 - torch.exp(-(S**2) / (2*c**2))
+    expRa = 1.0 - torch.exp(-(Ra**2) / (2*alpha**2))  # suppress sheets
+    expRb = torch.exp(-(Rb**2) / (2*beta**2))          # suppress blobs
+    expS  = 1.0 - torch.exp(-(S**2) / (2*c**2))        # suppress noise/background
     V = expRa * expRb * expS
 
     # Polarity mask:
@@ -310,26 +311,50 @@ def frangi_3d(
 # -----------------------------
 class FrangiLoss(nn.Module):
     """
-    Uses Frangi(QSM) as a gated prior and Frangi(P) as a differentiable shape loss.
+    Uses Frangi(image) as a gated prior and a genuinely differentiable
+    Frangi(prediction) as a shape/tubularity loss.
+
+    Unlike a version that runs Frangi under no_grad on a hard-thresholded
+    mask (purely descriptive, no gradient through the actual vesselness
+    formula), this computes the Hessian-eigenvalue-ratio vesselness score
+    directly on the continuous probability map, with gradients enabled, so
+    the loss can actually push the network toward producing tube-like
+    (2 similar large eigenvalues + 1 small one) local structure rather than
+    blob-like (3 similar eigenvalues) structure.
+
+    Three terms:
+      - loss_tubular: directly rewards the PREDICTION's own vesselness score
+        wherever the image supports a vessel (V_gate). This is the term that
+        actually differentiates through the Frangi formula.
+      - loss_hinge: "complete the vessel" -- where the image's vesselness
+        exceeds the (detached) current prediction's vesselness, push vein_p
+        up. V_P is detached here so the network can't cheat by reshaping
+        instead of growing probability where the image supports it.
+      - loss_blob: NEW -- penalizes high vein_p with low (detached)
+        vesselness OUTSIDE the image-gated region, i.e. blob/sheet-shaped
+        false positives the image itself doesn't support as vessel-like.
 
     Inputs:
         I_chi: (B,1,D,H,W) z-scored QSM
         P    : (B,1,D,H,W) sigmoid probabilities
         Y    : (B,1,D,H,W) optional imperfect labels
     """
-    def __init__(self):
+    def __init__(self, weight_tubular=10.0, weight_hinge=5.0, weight_blob=5.0):
         super().__init__()
         self.sig_img  = (0.6, 0.9, 1.2, 1.8)  # image scales
         self.sig_mask = (0.01, 0.2, 0.3)       # mask/prob scales
         self.alpha_tau = (6.0, 1E-5)          # gate sharpness/midpoint
         self.vein_channel = 1
-        
+        self.weight_tubular = weight_tubular
+        self.weight_hinge = weight_hinge
+        self.weight_blob = weight_blob
+
     def _resize_like(self, x, ref, is_mask=False):
         if x.shape[2:] == ref.shape[2:]:
             return x
         mode = 'nearest' if is_mask else 'trilinear'
         return F.interpolate(x, size=ref.shape[2:], mode=mode, align_corners=False if mode=='trilinear' else None)
-    
+
     def forward(self, net_output, data):
         """
         net_output: (B,C,X,Y,Z)
@@ -339,8 +364,10 @@ class FrangiLoss(nn.Module):
 
         # ---- cast everything to fp32 inside, return in original dtype ----
         net_output32 = net_output.float()
-        chi_qsm = data[:, 0:1].to(device=device, dtype=torch.float32)
-        V_I     = data[:, -1:].to(device=device, dtype=torch.float32)
+        # "chi_qsm" here is really just CH_PRIMARY — used only for the nonzero
+        # brain mask, which is valid for QSM or R2* alike.
+        chi_qsm = data[:, CH_PRIMARY:CH_PRIMARY + 1].to(device=device, dtype=torch.float32)
+        V_I     = data[:, CH_FRANGI:CH_FRANGI + 1].to(device=device, dtype=torch.float32)
 
         brain_mask = (chi_qsm != 0).to(torch.float32)
 
@@ -357,37 +384,73 @@ class FrangiLoss(nn.Module):
 
         # ---- gate from image Frangi (prior, no grad) ----
         with torch.no_grad():
-            # Normalize V_I per-subject so the gate threshold (0.51) is consistent
-            # regardless of which QSM method produced the pre-computed Frangi map.
-            # Subsample to avoid torch.quantile's 2^24-element limit on large volumes.
-            flat = V_I[brain_mask > 0].float()
-            if flat.numel() > 500_000:
-                flat = flat[torch.randperm(flat.numel(), device=flat.device)[:500_000]]
-            v99 = torch.quantile(flat, 0.99).clamp_min(1e-6)
-            V_I = (V_I / v99).clamp(0.0, 1.0)
-
             V_gate = torch.sigmoid(alpha * (V_I - tau))
             V_gate = F.max_pool3d(V_gate, kernel_size=3, stride=1, padding=1)
 
-        # Select only the top 30% of Frangi-response voxels (truly tubular regions).
-        # Top ~10% of Frangi response: high-confidence tubular voxels only.
-        # V_I > 0.7 (30% of brain) was too broad — unlabeled tubular structures
-        # kept the average flat even as Dice improved on labeled veins.
-        valid = (V_I > 0.9) & (brain_mask > 0)
+        valid = (V_gate > 0.51) & (brain_mask > 0)
 
-        # ---- completion hinge weighted by V_I ----
-        # Weight each voxel by its Frangi response so the highest-confidence
-        # tubular voxels drive the gradient, not the noisy borderline ones.
+        # ---- Frangi on the CONTINUOUS prediction, gradients enabled ----
+        # This is the actual shape-loss fix: vein_p's local Hessian
+        # eigenvalue structure now directly receives gradient from how
+        # tube-like (vs blob-like) it is.
+        V_P, _ = frangi_3d(
+            vein_p,
+            sigmas=self.sig_mask,
+            alpha=0.8,
+            beta=0.8,
+            c=4.0,
+            bright_vessels=True,
+            return_scale=False
+        )
+        with torch.no_grad():
+            V_P_max = V_P[valid].max().clamp_min(1e-8) if valid.any() else V_P.max().clamp_min(1e-8)
+            V_I_max = V_I[valid].max().clamp_min(1e-8) if valid.any() else V_I.new_ones(1)
+            scale   = (V_I_max / V_P_max).clamp(0.1, 500.0)
+        V_P = V_P * scale  # scale is a detached scalar constant; V_P stays differentiable
+
+        margin = 0.1
+        valid_float = valid.float()
+        N = valid_float.sum().clamp_min(1.0)
+
         if valid.any():
-            vi_w = V_I[valid].detach()
-            loss_hinge = (vi_w * F.relu(V_gate[valid].detach() - vein_p[valid])).mean()
+            # Deep interior of a thick predicted vein: Hessian is locally
+            # flat there (low vesselness) even for a genuine vein core, so
+            # exclude it from the shape terms -- only the tube-like boundary
+            # region should be judged by the vesselness formula. Threshold
+            # (not exact ==0) since V_P is now a continuous quantity.
+            inner_vein_f = ((V_P.detach() < 1e-6) & (vein_p.detach() >= 0.5)).float()
+            vmask_f = valid_float * (1.0 - inner_vein_f)
+
+            # Reward the prediction's OWN vesselness directly -- gradient
+            # flows through V_P here, this is the real shape supervision.
+            loss_tubular = -(V_gate.detach() * V_P * vmask_f).sum() / N
+
+            # Completion term: where image vesselness exceeds current
+            # (detached) prediction vesselness, push probability up.
+            hinge_map  = torch.relu((V_I + margin) - V_P.detach()) * V_gate.detach()
+            loss_hinge = (hinge_map * (1.0 - vein_p) * vmask_f).sum() / N
         else:
+            loss_tubular = vein_p.new_zeros(())
             loss_hinge = vein_p.new_zeros(())
 
-        loss = loss_hinge
+        # Blob suppression: penalize high vein_p with low (detached)
+        # vesselness where the IMAGE does not support a vessel -- directly
+        # discourages non-tubular false positives (e.g. bright artifacts in
+        # regions with no real vessel contrast).
+        non_gated_region = brain_mask * (1.0 - V_gate.detach())
+        N_blob = non_gated_region.sum().clamp_min(1.0)
+        loss_blob = (vein_p * (1.0 - V_P.detach().clamp(0.0, 1.0)) * non_gated_region).sum() / N_blob
 
-        if not torch.isfinite(loss).item():
-            print(f"[WARN] FrangiLoss non-finite: {float(loss):.4f}", flush=True)
+        loss = (self.weight_tubular * loss_tubular
+                + self.weight_hinge * loss_hinge
+                + self.weight_blob * loss_blob)
+
+        if not torch.isfinite(loss_tubular).item():
+            print(f"[WARN] FrangiLoss non-finite tubular: {float(loss_tubular):.4f}", flush=True)
+        if not torch.isfinite(loss_hinge).item():
+            print(f"[WARN] FrangiLoss non-finite hinge: {float(loss_hinge):.4f}", flush=True)
+        if not torch.isfinite(loss_blob).item():
+            print(f"[WARN] FrangiLoss non-finite blob: {float(loss_blob):.4f}", flush=True)
 
         # return in same dtype as net_output for AMP / GradScaler
         return loss

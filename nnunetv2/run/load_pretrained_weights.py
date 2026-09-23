@@ -28,6 +28,7 @@ def load_pretrained_weights(network, fname, verbose=False):
         'field_embed.',
         'film_enc',
         'film_bottle',
+        'pos_mlp',
     ]
 
     if isinstance(network, DDP):

@@ -55,9 +55,17 @@ class VeinPhysics_Frangi_DC_and_CE_loss(nn.Module):
     def __init__(self, soft_dice_kwargs, ce_kwargs, vpl_kwargs, weight_ce=2, weight_dice=2,
                  weight_tversky=0.5, weight_physics=2, weight_frangi=0.15,
                  weight_volume=1.0, volume_thresh=1.25,
+                 physics_cap_ratio=1.0, frangi_cap_ratio=0.5,
                  ignore_label=None, dice_class=SoftDiceLoss):
         """
         Weights for CE and Dice do not need to sum to one. You can set whatever you want.
+
+        physics_cap_ratio / frangi_cap_ratio: the physics/Frangi *contribution*
+        (weight * raw_loss) is soft-clamped to at most this multiple of the
+        Dice contribution (weight_dice * dc_loss). Previously this imbalance
+        was only detected and printed as an "[ALARM]" (never corrected); now
+        it's actually dampened, so a single bad batch can't let an auxiliary
+        term dominate the gradient.
         :param soft_dice_kwargs:
         :param ce_kwargs:
         :param aggregate:
@@ -76,6 +84,8 @@ class VeinPhysics_Frangi_DC_and_CE_loss(nn.Module):
         self.weight_frangi = weight_frangi
         self.weight_volume = weight_volume
         self.volume_thresh = volume_thresh
+        self.physics_cap_ratio = physics_cap_ratio
+        self.frangi_cap_ratio = frangi_cap_ratio
         self.ignore_label = ignore_label
 
         self.ce = RobustCrossEntropyLoss(**ce_kwargs)
@@ -84,20 +94,48 @@ class VeinPhysics_Frangi_DC_and_CE_loss(nn.Module):
         self.tversky = FocalTverskyLoss(alpha=0.3, beta=0.7, gamma=0.75)
         self.frangi = FrangiLoss()
 
+    def _capped_contribution(self, name: str, raw_loss: torch.Tensor, weight: float,
+                              ref_contribution: float, cap_ratio: float) -> torch.Tensor:
+        """
+        Returns weight * raw_loss, soft-clamped so its magnitude never exceeds
+        cap_ratio * |ref_contribution| (the Dice contribution). Unlike the old
+        print-only "[ALARM]", this actually prevents one auxiliary term from
+        dominating the gradient on a bad batch. No-ops if ref_contribution is
+        ~0 (no dice signal to scale against).
+        """
+        contribution = weight * raw_loss
+        ref_abs = abs(float(ref_contribution))
+        if ref_abs < 1e-8:
+            return contribution
+        cap = cap_ratio * ref_abs
+        contrib_abs = abs(float(contribution))
+        if contrib_abs > cap:
+            scale = cap / (contrib_abs + 1e-12)
+            print(f'[LOSS CAP] {name} contribution {float(contribution):.4f} exceeds '
+                  f'{cap_ratio:.2f}x Dice contribution ({ref_contribution:.4f}) '
+                  f'-> scaling by {scale:.3f}', flush=True)
+            contribution = contribution * scale
+        return contribution
+
     def forward(self,
                 net_output: torch.Tensor,
                 target: torch.Tensor,
                 data: torch.Tensor,
                 b0_dir: torch.Tensor = None,
-                domain_idx: torch.Tensor = None) -> torch.Tensor:
+                domain_idx: torch.Tensor = None,
+                qsm_mask: torch.Tensor = None) -> torch.Tensor:
         """
         net_output: (B, C, X, Y, Z) logits
         target    : (B, 1 or 2, X, Y, Z) (2 if includes chi/localfield channels for physics)
         data      : (B, C, X, Y, Z) input data tensor
         b0_dir    : (B,3) or (3,) unit vector(s) in image axes
         domain_idx: (B,) long tensor of QSM method indices
+        qsm_mask  : (B,) bool, True where this sample's primary channel is an
+                    actual QSM chi map (False for e.g. R2*). Forwarded to the
+                    physics loss so non-QSM samples never contribute to it.
+                    None means "treat every sample as QSM" (back-compat).
         """
-        
+
         # ---- ignore-label handling for Dice/CE ----
         if self.ignore_label is not None:
             assert target.shape[1] >= 1, "target needs at least a class channel"
@@ -113,10 +151,15 @@ class VeinPhysics_Frangi_DC_and_CE_loss(nn.Module):
             dc_loss = self.dc(net_output, target_dice, loss_mask=mask)
         else:
             dc_loss = self.dc(net_output.detach(), target_dice, loss_mask=mask)
-        
+
         ce_loss = self.ce(net_output, target_dice[:, 0]) if (self.weight_ce != 0 and self.ce is not None and (self.ignore_label is None or num_fg > 0)) else 0.0
 
         total = self.weight_ce * ce_loss + self.weight_dice * dc_loss
+
+        # Reference contribution used to cap the auxiliary (physics/Frangi)
+        # terms below — computed now, before they can perturb `total`.
+        dc_raw = float(dc_loss)
+        wdc = self.weight_dice * dc_raw
 
         # ---- Tversky: all samples ----
         if self.weight_tversky != 0:
@@ -125,7 +168,9 @@ class VeinPhysics_Frangi_DC_and_CE_loss(nn.Module):
         else:
             tversky_loss = self.tversky(net_output.detach(), target_dice)
 
-        # ---- Physics term ----
+        # ---- Physics term (QSM samples only — see qsm_mask) ----
+        phys_loss = None
+        phys_contribution = None
         if self.vpl is not None and self.weight_physics != 0:
             if b0_dir is not None:
                 if b0_dir.ndim == 1:
@@ -141,16 +186,25 @@ class VeinPhysics_Frangi_DC_and_CE_loss(nn.Module):
                 data       = data,
                 b0_dir     = b0_dir,
                 target     = target,
+                qsm_mask   = qsm_mask,
             )
-            total = total + self.weight_physics * phys_loss
+            phys_contribution = self._capped_contribution(
+                'Physics', phys_loss, self.weight_physics, wdc, self.physics_cap_ratio)
+            total = total + phys_contribution
 
-        # ---- Frangi: all samples ----
+        # ---- Frangi: all samples (generic vesselness prior, modality-agnostic) ----
+        frangi_loss = None
+        frangi_contribution = None
         if self.frangi is not None and self.weight_frangi != 0:
             with torch.cuda.amp.autocast(enabled=False):
                 frangi_loss = self.frangi(net_output=net_output.float(), data=data)
-            total = total + self.weight_frangi * frangi_loss.to(total.dtype)
+            frangi_contribution = self._capped_contribution(
+                'Frangi', frangi_loss, self.weight_frangi, wdc, self.frangi_cap_ratio
+            ).to(total.dtype)
+            total = total + frangi_contribution
 
         # ---- Volume limiter: penalise over-prediction beyond volume_thresh × GT ----
+        vol_loss = None
         if self.weight_volume > 0:
             with torch.no_grad():
                 gt_vein = (target_dice == 1).float()
@@ -166,46 +220,20 @@ class VeinPhysics_Frangi_DC_and_CE_loss(nn.Module):
         else:
             method_str = 'unknown'
 
-        _lv = locals()
-        dc_raw = float(dc_loss)
-        wdc    = self.weight_dice * dc_raw
-
-        def _wstr(key, w):
-            if key not in _lv:
+        def _fmt(raw, contribution):
+            if raw is None:
                 return 'n/a'
-            raw = float(_lv[key])
-            return f'{raw:.4f}(w={w * raw:.4f})'
-
-        phys_raw    = float(_lv['phys_loss'])    if 'phys_loss'    in _lv else None
-        frangi_raw  = float(_lv['frangi_loss'])  if 'frangi_loss'  in _lv else None
-        vol_raw     = float(_lv['vol_loss'])     if 'vol_loss'     in _lv else None
-        tversky_raw = float(_lv['tversky_loss']) if 'tversky_loss' in _lv else None
+            return f'{float(raw):.4f}(contrib={float(contribution):.4f})'
 
         print(
             f'[{method_str}] '
             f'DC: {dc_raw:.4f}(w={wdc:.4f})  '
-            f'Tversky: {_wstr("tversky_loss", self.weight_tversky)}  '
-            f'Phys: {_wstr("phys_loss", self.weight_physics)}  '
-            f'Frangi: {_wstr("frangi_loss", self.weight_frangi)}  '
-            f'Vol: {_wstr("vol_loss", self.weight_volume)}',
+            f'Tversky: {float(tversky_loss):.4f}(w={self.weight_tversky * float(tversky_loss):.4f})  '
+            f'Phys: {_fmt(phys_loss, phys_contribution)}  '
+            f'Frangi: {_fmt(frangi_loss, frangi_contribution)}  '
+            f'Vol: {"n/a" if vol_loss is None else f"{float(vol_loss):.4f}(w={self.weight_volume * float(vol_loss):.4f})"}',
             flush=True
         )
-
-        # Alarm: catch imbalance early so we don't waste a full run
-        if phys_raw is not None and abs(self.weight_physics * phys_raw) > abs(wdc):
-            print(
-                f'[ALARM] Physics overwhelms Dice! '
-                f'wPhys={self.weight_physics * phys_raw:.4f} vs wDC={wdc:.4f}  '
-                f'→ reduce weight_physics (currently {self.weight_physics})',
-                flush=True
-            )
-        if frangi_raw is not None and abs(self.weight_frangi * frangi_raw) > 0.5 * abs(wdc):
-            print(
-                f'[ALARM] Frangi > 50% of Dice! '
-                f'wFrangi={self.weight_frangi * frangi_raw:.4f} vs wDC={wdc:.4f}  '
-                f'→ reduce weight_frangi (currently {self.weight_frangi})',
-                flush=True
-            )
 
         return total
 
