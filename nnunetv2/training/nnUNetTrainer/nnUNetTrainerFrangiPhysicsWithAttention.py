@@ -690,7 +690,18 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
                             weight_ce=1,
                             weight_dice=1,
                             weight_tversky=0.5,
-                            weight_physics=2,
+                            # weight_physics=2 measured at only ~3-17% of the Dice
+                            # contribution across the prediction-quality spectrum
+                            # (PhysicsFieldLoss's own internal b_scale-based
+                            # auto-discount shrinks the raw loss before this
+                            # weight is applied) -- effectively along for the
+                            # ride rather than a real constraint. Bumped 10x,
+                            # matching the precedent in the sibling
+                            # VeinPhysics_DC_and_CE_loss trainer (no Frangi),
+                            # which already defaults weight_physics=20. Targets
+                            # a ~20-50% of Dice contribution, comparable to
+                            # where weight_frangi=0.25 already sits.
+                            weight_physics=20,
                             weight_frangi=0.25,
                             weight_volume=0.0,
                             ignore_label=self.label_manager.ignore_label,
