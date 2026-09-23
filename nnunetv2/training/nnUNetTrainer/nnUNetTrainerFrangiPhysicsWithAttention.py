@@ -681,29 +681,42 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
             self.batch_size = batch_size_per_GPU[my_rank]
             self.oversample_foreground_percent = oversample_percent
 
+    # Loss weights as class attributes (not inlined in _build_loss) so an
+    # ablation subclass can override just these, e.g.:
+    #   class ...PhysicsOnly(nnUNetTrainerFrangiPhysicsWithAttention):
+    #       WEIGHT_FRANGI = 0.0
+    # -- inherits every other part of the pipeline (network, data, NaN guard,
+    # deep supervision, checkpointing) unchanged, so the ablation is directly
+    # comparable to the combined run and never drifts out of sync with future
+    # fixes to this trainer. See nnUNetTrainerFrangiPhysicsWithAttentionPhysicsOnly.py
+    # and ...FrangiOnly.py.
+    WEIGHT_CE = 1
+    WEIGHT_DICE = 1
+    WEIGHT_TVERSKY = 0.5
+    # weight_physics=2 measured at only ~3-17% of the Dice contribution across
+    # the prediction-quality spectrum (PhysicsFieldLoss's own internal
+    # b_scale-based auto-discount shrinks the raw loss before this weight is
+    # applied) -- effectively along for the ride rather than a real
+    # constraint. Bumped 10x, matching the precedent in the sibling
+    # VeinPhysics_DC_and_CE_loss trainer (no Frangi), which already defaults
+    # weight_physics=20. Targets a ~20-50% of Dice contribution, comparable to
+    # where weight_frangi=0.25 already sits.
+    WEIGHT_PHYSICS = 20
+    WEIGHT_FRANGI = 0.25
+    WEIGHT_VOLUME = 0.0
+
     def _build_loss(self):
         loss = VeinPhysics_Frangi_DC_and_CE_loss(
                             {'batch_dice': self.configuration_manager.batch_dice,
                             'do_bg': True, 'smooth': 1e-5, 'ddp': self.is_ddp},
                             {},
                             {},
-                            weight_ce=1,
-                            weight_dice=1,
-                            weight_tversky=0.5,
-                            # weight_physics=2 measured at only ~3-17% of the Dice
-                            # contribution across the prediction-quality spectrum
-                            # (PhysicsFieldLoss's own internal b_scale-based
-                            # auto-discount shrinks the raw loss before this
-                            # weight is applied) -- effectively along for the
-                            # ride rather than a real constraint. Bumped 10x,
-                            # matching the precedent in the sibling
-                            # VeinPhysics_DC_and_CE_loss trainer (no Frangi),
-                            # which already defaults weight_physics=20. Targets
-                            # a ~20-50% of Dice contribution, comparable to
-                            # where weight_frangi=0.25 already sits.
-                            weight_physics=20,
-                            weight_frangi=0.25,
-                            weight_volume=0.0,
+                            weight_ce=self.WEIGHT_CE,
+                            weight_dice=self.WEIGHT_DICE,
+                            weight_tversky=self.WEIGHT_TVERSKY,
+                            weight_physics=self.WEIGHT_PHYSICS,
+                            weight_frangi=self.WEIGHT_FRANGI,
+                            weight_volume=self.WEIGHT_VOLUME,
                             ignore_label=self.label_manager.ignore_label,
                             dice_class=MemoryEfficientSoftDiceLoss)
 
@@ -1361,12 +1374,19 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
     def on_train_epoch_end(self, train_outputs: List[dict]):
         outputs = collate_outputs(train_outputs)
 
+        # nanmean, not mean: train_step returns a deliberate NaN sentinel for
+        # batches the non-finite-loss/grad guard skips (see train_step). With
+        # plain mean, a single skipped batch out of num_iterations_per_epoch
+        # poisons the whole epoch's printed train_loss to "nan", even though
+        # every other batch that epoch trained normally (Pseudo dice/val_loss
+        # for that same epoch are unaffected) -- purely a reporting artifact,
+        # not a sign the epoch actually failed.
         if self.is_ddp:
             losses_tr = [None for _ in range(dist.get_world_size())]
             dist.all_gather_object(losses_tr, outputs['loss'])
-            loss_here = np.vstack(losses_tr).mean()
+            loss_here = np.nanmean(np.vstack(losses_tr))
         else:
-            loss_here = np.mean(outputs['loss'])
+            loss_here = np.nanmean(outputs['loss'])
 
         self.logger.log('train_losses', loss_here, self.current_epoch)
 
