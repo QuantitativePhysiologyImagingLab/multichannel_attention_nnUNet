@@ -44,6 +44,8 @@ def main():
     parser.add_argument('--step_size',     type=float, default=0.5)
     parser.add_argument('--save_probs',    action='store_true')
     parser.add_argument('--disable_tta',   action='store_true')
+    parser.add_argument('--checkpoint',    default='checkpoint_best.pth',
+                        help='Checkpoint filename inside the trainer output folder (default: checkpoint_best.pth)')
     args = parser.parse_args()
 
     method_lower_map = {k.lower(): v for k, v in METHOD_TO_IDX.items()}
@@ -66,7 +68,7 @@ def main():
     predictor.initialize_from_trained_model_folder(
         model_training_output_dir=_find_model_folder(args.d, args.tr, args.p),
         use_folds=(args.f,),
-        checkpoint_name='checkpoint_apr26.pth',
+        checkpoint_name=args.checkpoint,
     )
 
     # inject domain + field indices into the network before prediction
