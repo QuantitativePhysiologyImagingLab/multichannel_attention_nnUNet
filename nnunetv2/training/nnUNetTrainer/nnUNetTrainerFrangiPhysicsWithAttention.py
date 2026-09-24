@@ -372,7 +372,7 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
         self.probabilistic_oversampling = False
         self.num_iterations_per_epoch = 250
         self.num_val_iterations_per_epoch = 50
-        self.num_epochs = 500
+        self.num_epochs = self.NUM_EPOCHS
         self.current_epoch = 0
         self.enable_deep_supervision = True
 
@@ -704,6 +704,11 @@ class nnUNetTrainerFrangiPhysicsWithAttention(nnUNetTrainer):
     WEIGHT_PHYSICS = 20
     WEIGHT_FRANGI = 0.25
     WEIGHT_VOLUME = 0.0
+
+    # Same override pattern as the WEIGHT_* attributes above: combined-loss
+    # run gets more epochs, ablation subclasses pin this back to 500 so
+    # they're unaffected.
+    NUM_EPOCHS = 1000
 
     def _build_loss(self):
         loss = VeinPhysics_Frangi_DC_and_CE_loss(

@@ -19,3 +19,4 @@ class nnUNetTrainerFrangiPhysicsWithAttentionPhysicsOnly(nnUNetTrainerFrangiPhys
     Run with: -tr nnUNetTrainerFrangiPhysicsWithAttentionPhysicsOnly
     """
     WEIGHT_FRANGI = 0.0
+    NUM_EPOCHS = 500

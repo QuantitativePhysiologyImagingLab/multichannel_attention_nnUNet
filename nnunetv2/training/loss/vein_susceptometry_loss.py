@@ -251,13 +251,24 @@ class PhysicsFieldLoss(nn.Module):
         diff = (B_vein_pred - B_residual) * eval_mask
         loss_phys = diff.abs().sum() / eval_mask.sum().clamp_min(1.0)
 
-        # Top-10% tail loss on the same residual (catches localised errors)
+        # Top-10% tail loss on the same residual (catches localised errors).
+        # eval_mask can end up empty (e.g. a batch mixing an R2*-gated-out
+        # sample with a QSM sample whose crop happens to contain no dilated
+        # GT vein voxels) -- torch.topk on an empty tensor raises, so guard.
         resid_vals = diff.abs()[eval_mask > 0].flatten()
-        k = max(1, int(self.topk_frac * resid_vals.numel()))
-        top10 = torch.topk(resid_vals, k).values.mean()
+        if resid_vals.numel() > 0:
+            k = max(1, int(self.topk_frac * resid_vals.numel()))
+            k = min(k, resid_vals.numel())
+            top10 = torch.topk(resid_vals, k).values.mean()
+        else:
+            top10 = torch.zeros((), device=diff.device, dtype=diff.dtype)
 
         # Sign consistency in eval region
-        sign_hinge = F.relu(-(B_vein_pred * B_residual.detach())[eval_mask > 0]).mean()
+        sign_vals = (B_vein_pred * B_residual.detach())[eval_mask > 0]
+        if sign_vals.numel() > 0:
+            sign_hinge = F.relu(-sign_vals).mean()
+        else:
+            sign_hinge = torch.zeros((), device=diff.device, dtype=diff.dtype)
 
         # Simple weighted combination (drop mae_masked — redundant with loss_phys now)
         L = loss_phys + 0.15 * top10 + 0.05 * sign_hinge
