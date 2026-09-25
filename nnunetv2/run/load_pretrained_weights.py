@@ -29,6 +29,7 @@ def load_pretrained_weights(network, fname, verbose=False):
         'film_enc',
         'film_bottle',
         'pos_mlp',
+        'r2star_adapter',
     ]
 
     if isinstance(network, DDP):

@@ -109,6 +109,33 @@ class _PriorGate(nn.Module):
         return const.view(1, 1, 1, 1, 1).to(device=ref.device, dtype=ref.dtype)
 
 
+class _R2starAdapter(nn.Module):
+    """
+    Small residual adapter giving the R2* domain dedicated extra capacity
+    right after enc1, without touching enc1's own (shared) weights. Applied
+    via UNetWithAttention's generic x1_transform hook, gated per-sample by
+    domain_idx so QSM samples get exactly zero contribution from this
+    module -- not just at initialization (last conv is zero-init, so the
+    adapter itself starts as a no-op), but structurally, for the whole
+    lifetime of training: whatever this adapter learns, only R2* samples
+    ever see it. Same conv/norm/activation convention as ConvBlock above
+    (InstanceNorm3d + ELU) for consistency with the rest of the encoder.
+    """
+    def __init__(self, channels: int):
+        super().__init__()
+        self.block = nn.Sequential(
+            nn.Conv3d(channels, channels, kernel_size=3, padding=1),
+            nn.InstanceNorm3d(channels),
+            nn.ELU(inplace=True),
+            nn.Conv3d(channels, channels, kernel_size=3, padding=1),
+        )
+        nn.init.zeros_(self.block[-1].weight)
+        nn.init.zeros_(self.block[-1].bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.block(x)
+
+
 class PriorGatedSingleChannelUNet(UNetWithAttention):
     """
     Structurally identical to ``UNetWithAttention(in_channels=1, ...)`` —
@@ -121,11 +148,12 @@ class PriorGatedSingleChannelUNet(UNetWithAttention):
     single cheap scalar multiply — no prior data required, no wasted compute.
     """
     def __init__(self, out_channels, patch_size, deep_supervision=True,
-                 num_domains=6, domain_embed_dim=32, n_priors=N_PRIORS):
+                 num_domains=6, domain_embed_dim=32, n_priors=N_PRIORS, base_features=64):
         super().__init__(in_channels=1, out_channels=out_channels, patch_size=patch_size,
                          deep_supervision=deep_supervision, num_domains=num_domains,
-                         domain_embed_dim=domain_embed_dim)
+                         domain_embed_dim=domain_embed_dim, base_features=base_features)
         self.prior_gate = _PriorGate(n_priors=n_priors)
+        self.r2star_adapter = _R2starAdapter(base_features)
 
         # Patch-position ("which region of the brain") conditioning. Zero-init
         # the last layer so position starts with exactly zero effect on the
@@ -147,7 +175,23 @@ class PriorGatedSingleChannelUNet(UNetWithAttention):
             gate = self.prior_gate.constant_gate(img)
         gated = img * (1.0 + gate)
         extra_emb = self.pos_mlp(pos) if pos is not None else None
-        return super().forward(gated, domain_idx=domain_idx, field_idx=field_idx, extra_emb=extra_emb)
+
+        # Resolve domain_idx the same way the base class's forward() would
+        # internally (None -> self.default_domain_idx), since x1_transform
+        # runs *inside* that forward, before its own resolution happens --
+        # the R2* adapter gate needs to match whatever domain conditioning
+        # actually applies to each sample.
+        resolved_domain_idx = domain_idx
+        if resolved_domain_idx is None:
+            resolved_domain_idx = torch.full((img.shape[0],), self.default_domain_idx,
+                                             dtype=torch.long, device=img.device)
+        r2star_gate = (resolved_domain_idx == R2STAR_DOMAIN_IDX).to(img.dtype).view(-1, 1, 1, 1, 1)
+
+        def _r2star_x1_transform(x1):
+            return x1 + r2star_gate * self.r2star_adapter(x1)
+
+        return super().forward(gated, domain_idx=domain_idx, field_idx=field_idx,
+                               extra_emb=extra_emb, x1_transform=_r2star_x1_transform)
 
 # ---- helper: independent of self ----
 def _safe_get_patch_size(configuration_manager=None, plans_manager=None, model_dir=None):

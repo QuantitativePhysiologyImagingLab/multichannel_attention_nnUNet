@@ -647,7 +647,7 @@ class UNetWithAttention(nn.Module):
             self.domain_embed = None
             self.field_embed  = None
 
-    def forward(self, x, domain_idx=None, field_idx=None, extra_emb=None):
+    def forward(self, x, domain_idx=None, field_idx=None, extra_emb=None, x1_transform=None):
         """
         extra_emb: optional (B, domain_embed_dim) tensor added into the FiLM
         embedding alongside the domain/field embeddings. Generic on purpose
@@ -655,6 +655,14 @@ class UNetWithAttention(nn.Module):
         whatever a subclass uses it for (e.g. patch-position conditioning in
         PriorGatedSingleChannelUNet). None -> identical behavior to before
         this parameter existed.
+
+        x1_transform: optional callable applied to the first encoder stage's
+        output (post-FiLM, if FiLM is enabled) before it feeds into enc2 and
+        into the decoder's first skip connection. Generic hook (not domain-
+        or adapter-specific) for the same reason as extra_emb -- e.g. a
+        subclass can pass a closure that adds a gated, per-sample residual
+        adapter here without this base class knowing what "R2star" is.
+        None -> identical behavior to before this parameter existed.
         """
         if not self.training:
             self.decoder.deep_supervision = False
@@ -673,12 +681,16 @@ class UNetWithAttention(nn.Module):
             if extra_emb is not None:
                 emb = emb + extra_emb
             x1 = self.film_enc1(self.enc1(x),          emb)
+            if x1_transform is not None:
+                x1 = x1_transform(x1)
             x2 = self.film_enc2(self.enc2(x1),         emb)
             x3 = self.film_enc3(self.enc3(x2),         emb)
             x4 = self.film_enc4(self.enc4(x3),         emb)
             b  = self.film_bottle(self.bottleneck(x4), emb)
         else:
             x1 = self.enc1(x)
+            if x1_transform is not None:
+                x1 = x1_transform(x1)
             x2 = self.enc2(x1)
             x3 = self.enc3(x2)
             x4 = self.enc4(x3)
