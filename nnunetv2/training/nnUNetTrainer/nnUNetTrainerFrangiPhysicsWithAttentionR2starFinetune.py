@@ -48,15 +48,17 @@ class nnUNetTrainerFrangiPhysicsWithAttentionR2starFinetune(nnUNetTrainerFrangiP
     UNFROZEN_PREFIXES = ('r2star_adapter',)
 
     def __init__(self, plans: dict, configuration: str, fold: int, dataset_json: dict,
-                 unpack_dataset: bool = True, device: torch.device = torch.device('cuda')):
-        # NOTE: must mirror the base trainer's exact __init__ signature
-        # (not *args, **kwargs) -- nnUNetTrainer.__init__ snapshots its own
-        # init args via inspect.signature(self.__init__).parameters, and
-        # self.__init__ always resolves to the most-derived (this) class's
-        # __init__. With *args/**kwargs here, that introspection sees
-        # parameter names 'args'/'kwargs' and then does locals()['args'] in
-        # the base __init__'s frame, which has no such local -> KeyError.
-        super().__init__(plans, configuration, fold, dataset_json, unpack_dataset, device)
+                 device: torch.device = torch.device('cuda')):
+        # NOTE: must mirror nnUNetTrainerFrangiPhysicsWithAttention's exact
+        # __init__ signature (not *args, **kwargs, and NOT the stock
+        # nnUNetTrainer signature either -- this base class drops
+        # unpack_dataset). nnUNetTrainer.__init__ snapshots its own init args
+        # via inspect.signature(self.__init__).parameters, and self.__init__
+        # always resolves to the most-derived (this) class's __init__. With
+        # *args/**kwargs here, that introspection sees parameter names
+        # 'args'/'kwargs' and then does locals()['args'] in the base
+        # __init__'s frame, which has no such local -> KeyError.
+        super().__init__(plans, configuration, fold, dataset_json, device)
         self.initial_lr = self.FINETUNE_LR
 
     def do_split(self):
